@@ -1,447 +1,549 @@
 const fs = require('fs');
 const path = require('path');
 
-/**
- * Formats byte size into human-readable string
- */
 function formatBytes(bytes) {
-  if (!bytes || isNaN(bytes) || bytes <= 0) return '크기 미상 (동적 스트림)';
+  if (!bytes || isNaN(bytes) || bytes <= 0) return '-';
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+/** Escape pipe characters so values don't break markdown tables */
+function cell(v) {
+  if (v === null || v === undefined || v === '') return '-';
+  return String(v).replace(/\|/g, '\\|').replace(/\n/g, ' ');
+}
+
+function code(v) {
+  if (v === null || v === undefined || v === '') return '-';
+  return '`' + String(v).replace(/`/g, "'").replace(/\|/g, '\\|').replace(/\n/g, ' ') + '`';
+}
+
 /**
- * Renders the DOM tree object into a clean ASCII tree diagram for AI comprehension
+ * Renders the DOM tree object into an ASCII tree diagram
  */
 function renderAsciiDomTree(node, prefix = '', isLast = true, isRoot = true) {
   if (!node) return '';
-  let lines = [];
-
+  const lines = [];
   const branch = isRoot ? '' : isLast ? '└── ' : '├── ';
   const badgeStr = node.layout ? ` [${node.layout}]` : '';
   const dimStr = node.dimensions ? ` (${node.dimensions})` : '';
   const textStr = node.text ? ` — "${node.text}"` : '';
-
   lines.push(`${prefix}${branch}${node.selector}${badgeStr}${dimStr}${textStr}`);
-
   const children = node.children || [];
   const nextPrefix = isRoot ? '' : prefix + (isLast ? '    ' : '│   ');
-
   children.forEach((child, idx) => {
-    const last = idx === children.length - 1;
-    lines.push(renderAsciiDomTree(child, nextPrefix, last, false));
+    lines.push(renderAsciiDomTree(child, nextPrefix, idx === children.length - 1, false));
   });
-
   return lines.join('\n');
 }
 
+function explainEvent(ev) {
+  return (
+    {
+      wheel: '마우스 휠 입력을 직접 처리 → 커스텀 스무스 스크롤 / 3D 카메라 이동 / 스크롤 하이재킹',
+      scroll: '스크롤 위치에 따라 요소 위치·투명도·헤더 상태·진행도 업데이트',
+      mousemove: '커서 위치 추적 → 패럴랙스, 3D 시선/회전, 커스텀 커서, 마그네틱 버튼',
+      pointermove: '포인터 위치 추적 → 3D 레이캐스팅/호버, 드래그, 커서 효과',
+      pointerdown: '클릭/드래그 시작 처리 (3D 오브젝트 조작, 드래그 슬라이더 등)',
+      resize: '뷰포트 변경 시 캔버스 크기·카메라 종횡비·레이아웃 재계산',
+      keydown: '키보드 단축키 / 게임형 조작 / 접근성 내비게이션',
+      touchstart: '모바일 터치 제스처 처리',
+      touchmove: '모바일 스와이프/드래그 처리',
+      deviceorientation: '기기 기울기(자이로) 기반 패럴랙스',
+      visibilitychange: '탭 비활성화 시 렌더 루프 일시정지 등 최적화',
+      click: '클릭 인터랙션',
+      mouseenter: '호버 진입 효과',
+      mouseleave: '호버 이탈 효과'
+    }[ev] || ''
+  );
+}
+
 /**
- * Generates the comprehensive AI Master Blueprint Markdown document
+ * Generates the AI Master Blueprint markdown
  */
 function generateMasterBlueprintMarkdown(data) {
-  const {
-    targetUrl,
-    analyzedAt,
-    metadata,
-    techStack,
-    designSystem,
-    howItWorks,
-    networkAssets,
-    sections,
-    domTree,
-    sanitizedHtml,
-    privacyStats
-  } = data;
+  const { targetUrl, finalUrl, httpStatus, analyzedAt, viewport, mobile, metadata, techStack, codeLibraries, threeModules, designSystem: ds, howItWorks: hw, networkAssets: na, referencedAssets, structure, sections, domTree, sanitizedHtml, savedScripts, privacyStats, screenshots } = data;
 
-  const lines = [];
+  const L = [];
+  const push = (...xs) => L.push(...xs);
 
-  // Header & AI System Instruction
-  lines.push(`# 🤖 AI 레퍼런스 마스터 블루프린트: ${metadata.title || targetUrl}`);
-  lines.push('');
-  lines.push('> **[AI에게 전달하는 가이드]**');
-  lines.push('> 이 문서는 대상 웹사이트의 **디자인 시스템(색상, 타이포그래피, CSS 변수)**, **전체 레이아웃 및 섹션 구조**, **작동 원리(스크롤 인터랙션, 애니메이션, 이벤트 메커니즘)**, **3D 모델/WebGL/셰이더 에셋의 정확한 출처**, 그리고 **민감 정보가 제거된 소스코드**를 담고 있습니다.');
-  lines.push('> 사용자는 이 사이트의 디자인 분위기, 레이아웃 설계, 인터랙션 작동 방식 또는 3D 연출을 참고하여 웹사이트를 구현하거나 분석하기를 원합니다.');
-  lines.push('');
-  lines.push('---');
-  lines.push('');
+  push(`# AI 레퍼런스 블루프린트: ${metadata.title || targetUrl}`, '');
+  push('> **[AI에게]** 이 문서는 아래 웹사이트를 자동 분석한 결과입니다. 디자인 시스템(색상·타이포·토큰), 페이지/섹션 구조, 작동 원리(스크롤·애니메이션·이벤트), 사용 기술과 3D 에셋의 출처, 그리고 민감정보가 제거된 소스코드 위치를 담고 있습니다.');
+  push('> 사용자는 이 사이트를 **참고하여 비슷한 디자인/구조/인터랙션을 구현**하거나 작동 방식을 이해하고 싶어 합니다. 수치(px, HEX, 폰트 등)는 실제 브라우저에서 계산된 값입니다.', '');
 
-  // 1. Overview & Metadata
-  lines.push('## 1. 사이트 기본 정보 및 전체 아키텍처 개요');
-  lines.push('');
-  lines.push(`- **분석 대상 URL**: \`${targetUrl}\``);
-  lines.push(`- **사이트 제목**: ${metadata.title || '(제목 없음)'}`);
-  if (metadata.description) {
-    lines.push(`- **사이트 설명**: ${metadata.description}`);
+  // 0. File index
+  push('## 0. 함께 제공되는 파일 (1:1 완벽 클론 패키지)', '');
+  push('| 파일 | 내용 |', '| :--- | :--- |');
+  push('| `01_AI_MASTER_BLUEPRINT.md` | 이 문서 (전체 아키텍처 + 디자인 토큰 + 3D/모션 작동 원리 통합) |');
+  push('| `02_sanitized_source.html` | 렌더링 완료 후의 전체 DOM HTML (상대경로→절대경로 변환 완료, 트래커·개인정보 제거) |');
+  push('| `03_styles_and_tokens.css` | 외부/인라인 CSS 전체 (출처별 구분, url() 절대경로 변환 완료) |');
+  push('| `04_structured_data.json` | 전체 분석 원본 구조화 데이터 (JSON) |');
+  if (savedScripts && savedScripts.length) push(`| \`05_scripts/\` | JS 소스 ${savedScripts.length}개 (정제·정렬됨, 목록은 7장) |`);
+  push('| `06_section_cloning_specs.md` | **섹션별 1:1 복제 명세서** (각 섹션 내부 모든 하위 요소의 계산된 CSS 수치 트리 + 섹션별 정제 HTML 코드) |');
+  if (structure && structure.svgCatalog && structure.svgCatalog.length) {
+    push(`| \`07_svg_icons_and_graphics.md\` | 페이지 내 고유 SVG 로고·아이콘 ${structure.svgCatalog.length}개의 원본 \`<svg>\` 벡터 코드 모음 |`);
   }
-  lines.push(`- **비주얼 테마 모드**: **${metadata.themeMode}** (기본 배경색: \`${metadata.pageBackground}\`)`);
-  lines.push(`- **뷰포트 및 전체 길이**: 기준 뷰포트 \`${metadata.viewportWidth}x${metadata.viewportHeight}px\` / 전체 스크롤 높이 \`${metadata.scrollHeight}px\` (약 **${(metadata.scrollHeight / metadata.viewportHeight).toFixed(1)}배 화면 길이**)`);
-  lines.push(`- **분석 일시**: ${analyzedAt}`);
-  lines.push('');
+  if (screenshots && (screenshots.viewportPath || screenshots.fullPagePath)) {
+    push(`| \`screenshots/\` | 첫 화면, 스크롤 단계별 ${screenshots.scrollShots ? screenshots.scrollShots.length : 0}장, 전체 페이지 스크린샷 |`);
+  }
+  push('');
 
-  // Tech Stack Table
-  lines.push('### 🛠️ 감지된 핵심 기술 스택 (Tech Stack & Libraries)');
-  lines.push('');
-  if (techStack && techStack.length > 0) {
-    lines.push('| 분류 (Category) | 기술 / 라이브러리명 | 감지 근거 및 역할 |');
-    lines.push('| :--- | :--- | :--- |');
-    techStack.forEach((t) => {
-      lines.push(`| **${t.category}** | \`${t.name}\` | ${t.reason} |`);
+  // 1. Overview
+  push('## 1. 개요', '');
+  push(`- **URL**: ${targetUrl}${finalUrl && finalUrl !== targetUrl ? ` → 최종: ${finalUrl}` : ''}${httpStatus ? ` (HTTP ${httpStatus})` : ''}`);
+  push(`- **제목**: ${metadata.title || '-'}`);
+  if (metadata.description) push(`- **설명**: ${metadata.description}`);
+  if (metadata.lang) push(`- **언어**: ${metadata.lang}`);
+  if (metadata.generator) push(`- **Generator 메타**: ${metadata.generator}`);
+  push(`- **테마**: ${metadata.themeMode}, 기본 배경 \`${metadata.pageBackground}\`${metadata.themeColor ? `, theme-color \`${metadata.themeColor}\`` : ''}`);
+  push(`- **분석 뷰포트**: ${viewport.width}x${viewport.height} (${mobile ? '모바일' : '데스크톱'}) / 전체 높이 ${metadata.scrollHeight}px (≈ ${(metadata.scrollHeight / metadata.viewportHeight).toFixed(1)} 화면)`);
+  if (structure && structure.counts) {
+    const c = structure.counts;
+    push(`- **규모**: DOM 요소 ${c.elements}개, 이미지 ${c.images}, SVG ${c.svgs}, 비디오 ${c.videos}, 캔버스 ${c.canvases}, iframe ${c.iframes}, 버튼 ${c.buttons}, 링크 ${c.links}, 폼 ${c.forms}`);
+  }
+  push(`- **분석 시각**: ${analyzedAt}`, '');
+
+  push('### 1.1 사용 기술 (런타임 감지)', '');
+  if (techStack.length) {
+    push('| 분류 | 기술 | 근거 |', '| :--- | :--- | :--- |');
+    techStack.forEach((t) => push(`| ${cell(t.category)} | **${cell(t.name)}** | ${cell(t.reason)} |`));
+  } else push('- 런타임에서 특정 프레임워크가 감지되지 않음 (순수 HTML/CSS/JS 또는 번들에 숨겨짐 → 1.2 참고)');
+  push('');
+
+  push('### 1.2 JS 번들 정적 분석으로 확인된 라이브러리', '');
+  if (codeLibraries && codeLibraries.length) {
+    push('| 분류 | 라이브러리 | 발견 위치 | 근거 문자열 |', '| :--- | :--- | :--- | :--- |');
+    codeLibraries.forEach((l) => push(`| ${cell(l.category)} | **${cell(l.name)}** | ${cell(l.files.join(', '))} | ${code(l.evidence)} |`));
+  } else push('- 특이 라이브러리 시그니처 없음');
+  push('');
+  if (threeModules && threeModules.length) {
+    push(`- **Three.js 모듈/로더 사용 흔적**: ${threeModules.map((m) => `\`${m}\``).join(', ')}`, '');
+  }
+
+  // 2. Design system
+  push('## 2. 디자인 시스템', '');
+  push('### 2.1 컬러', '');
+  if (ds.backgroundColors.length) {
+    push('**배경/서피스** (화면 면적 가중치 순)', '', '| HEX | 사용 예 |', '| :--- | :--- |');
+    ds.backgroundColors.forEach((c) => push(`| ${code(c.hex)} | ${c.examples.map(code).join(', ')} |`));
+    push('');
+  }
+  if (ds.textColors.length) {
+    push('**텍스트** (사용 빈도 순)', '', '| HEX | 빈도 | 사용 예 |', '| :--- | :--- | :--- |');
+    ds.textColors.forEach((c) => push(`| ${code(c.hex)} | ${c.count} | ${c.examples.map(code).join(', ')} |`));
+    push('');
+  }
+  if (ds.accentColors.length) {
+    push('**포인트 / 버튼 배경**', '', '| HEX | 사용 예 |', '| :--- | :--- |');
+    ds.accentColors.forEach((c) => push(`| ${code(c.hex)} | ${c.examples.map(code).join(', ')} |`));
+    push('');
+  }
+  if (ds.borderColors && ds.borderColors.length) push(`- **테두리 색**: ${ds.borderColors.map((b) => `${code(b.value)}(${b.count})`).join(', ')}`, '');
+
+  if (ds.gradients.length || ds.glassEffects.length) {
+    push('### 2.2 그라디언트 / 글래스모피즘', '');
+    ds.gradients.forEach((g) => push(`- ${code(g.selector)}: ${code(g.value)}`));
+    ds.glassEffects.forEach((g) => push(`- **blur** ${code(g.selector)}: backdrop-filter ${code(g.backdropFilter)}, 배경 ${code(g.background)}, 테두리 ${code(g.border)}`));
+    push('');
+  }
+
+  push('### 2.3 타이포그래피', '');
+  if (ds.fonts.length) push(`- **폰트 패밀리** (텍스트 요소 수): ${ds.fonts.slice(0, 8).map((f) => `\`${f.name}\`(${f.usageCount})`).join(', ')}`);
+  if (na.fonts.length) {
+    push('- **웹폰트 파일/출처**:');
+    na.fonts.slice(0, 12).forEach((f) => push(`  - ${f.url.split('?')[0]} — ${f.provider}`));
+  }
+  if (ds.fontFaces && ds.fontFaces.length) {
+    push('- **`@font-face` 선언**:');
+    ds.fontFaces.slice(0, 10).forEach((ff) => push(`  - \`${ff.family}\` (weight: \`${ff.weight}\`, style: \`${ff.style}\`)${ff.srcUrl ? ` → \`${ff.srcUrl}\`` : ''}`));
+  }
+  push('');
+  if (ds.typographyScale.length) {
+    push('| 역할 | 셀렉터 | 폰트 | 크기 | 굵기 | 행간 | 자간 | 변환 | 색 | 예시 |', '| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |');
+    ds.typographyScale.forEach((t) => {
+      const f = (t.fontFamily || '').split(',')[0].replace(/["']/g, '');
+      push(`| ${cell(t.role)} | ${code(t.selector)} | ${cell(f)} | ${cell(t.fontSize)} | ${cell(t.fontWeight)} | ${cell(t.lineHeight)} | ${cell(t.letterSpacing)} | ${cell(t.textTransform)} | ${code(t.color)} | ${cell(t.sampleText)} |`);
     });
-  } else {
-    lines.push('- 별도의 무거운 프론트엔드 프레임워크 없이 표준 HTML5 / CSS3 / Vanilla JS 중심으로 작성된 사이트입니다.');
+    push('');
   }
-  lines.push('');
-  lines.push('---');
-  lines.push('');
 
-  // 2. Design System
-  lines.push('## 2. 🎨 디자인 시스템 & 시각적 스타일 토큰 ("어떤 디자인인가")');
-  lines.push('');
+  push('### 2.4 컴포넌트 스타일 토큰', '');
+  if (ds.buttonStyles && ds.buttonStyles.length) {
+    push('**버튼 스타일**', '', '| 셀렉터 | 텍스트 | 배경 | 글자색 | radius | padding | 폰트 | transition |', '| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |');
+    ds.buttonStyles.forEach((b) => push(`| ${code(b.selector)} | ${cell(b.text)} | ${code(b.background)} | ${code(b.color)} | ${cell(b.borderRadius)} | ${cell(b.padding)} | ${cell(b.fontSize + ' / ' + b.fontWeight)} | ${code(b.transition)} |`));
+    push('');
+  }
+  if (ds.borderRadii && ds.borderRadii.length) push(`- **border-radius** (빈도순): ${ds.borderRadii.map((r) => `${code(r.value)}×${r.count}`).join(', ')}`);
+  if (ds.gaps && ds.gaps.length) push(`- **gap 간격** (빈도순): ${ds.gaps.map((r) => `${code(r.value)}×${r.count}`).join(', ')}`);
+  if (ds.shadows && ds.shadows.length) push(`- **box-shadow**: ${ds.shadows.slice(0, 4).map((r) => code(r.value)).join(' / ')}`);
+  if (ds.mediaBreakpoints.length) push(`- **반응형 브레이크포인트**: ${ds.mediaBreakpoints.map(code).join(', ')}`);
+  push('');
 
-  // Colors
-  lines.push('### 2.1 컬러 팔레트 (Color Palette)');
-  lines.push('');
-  if (designSystem.backgroundColors.length > 0) {
-    lines.push('#### 배경 및 서피스 컬러 (Background & Surfaces)');
-    lines.push('| HEX / 투명도 | RGB 원본 | 주요 적용 요소 (Selectors) |');
-    lines.push('| :--- | :--- | :--- |');
-    designSystem.backgroundColors.forEach((c) => {
-      lines.push(`| \`${c.hex}\` | \`${c.rgb}\` | \`${c.examples.join('`, `')}\` |`);
+  if (ds.cssVariables.length) {
+    push('### 2.5 CSS 변수 (디자인 토큰)', '', '```css');
+    const bySel = new Map();
+    ds.cssVariables.slice(0, 100).forEach((v) => {
+      if (!bySel.has(v.selector)) bySel.set(v.selector, []);
+      bySel.get(v.selector).push(v);
     });
-    lines.push('');
-  }
-
-  if (designSystem.textColors.length > 0) {
-    lines.push('#### 타이포그래피 텍스트 컬러 (Text Colors)');
-    lines.push('| HEX / 투명도 | RGB 원본 | 빈도 | 주요 적용 요소 |');
-    lines.push('| :--- | :--- | :--- | :--- |');
-    designSystem.textColors.forEach((c) => {
-      lines.push(`| \`${c.hex}\` | \`${c.rgb}\` | ${c.count}회 | \`${c.examples.join('`, `')}\` |`);
-    });
-    lines.push('');
-  }
-
-  if (designSystem.accentColors.length > 0) {
-    lines.push('#### 포인트 및 인터랙티브 컬러 (Accents, Buttons, Links)');
-    lines.push('| HEX / 투명도 | 역할 (Role) | 주요 적용 요소 |');
-    lines.push('| :--- | :--- | :--- |');
-    designSystem.accentColors.forEach((c) => {
-      lines.push(`| \`${c.hex}\` | ${c.role} | \`${c.examples.join('`, `')}\` |`);
-    });
-    lines.push('');
-  }
-
-  // Gradients & Glassmorphism
-  if (designSystem.gradients.length > 0 || designSystem.glassEffects.length > 0) {
-    lines.push('### 2.2 그라디언트 & 글래스모피즘(Glassmorphism) 시각 효과');
-    lines.push('');
-    designSystem.gradients.forEach((g) => {
-      lines.push(`- **Gradient** (\`${g.selector}\`): \`${g.value}\``);
-    });
-    designSystem.glassEffects.forEach((gl) => {
-      lines.push(`- **Glassmorphism / Blur** (\`${gl.selector}\`): \`backdrop-filter: ${gl.backdropFilter}\`, 배경 \`${gl.background}\`, 테두리 \`${gl.border}\``);
-    });
-    lines.push('');
-  }
-
-  // Typography
-  lines.push('### 2.3 타이포그래피 시스템 (Typography Scale & Fonts)');
-  lines.push('');
-  if (designSystem.fonts.length > 0) {
-    lines.push(`- **주요 사용 폰트 패밀리**: ${designSystem.fonts.map((f) => `\`${f.name}\` (${f.usageCount}개 요소)`).join(', ')}`);
-  }
-  if (networkAssets.fonts.length > 0) {
-    lines.push(`- **네트워크 로드 웹폰트 출처**:`);
-    networkAssets.fonts.slice(0, 10).forEach((f) => {
-      lines.push(`  - \`${f.url}\` (${f.provider})`);
-    });
-  }
-  lines.push('');
-
-  if (designSystem.typographyScale.length > 0) {
-    lines.push('| 위계 역할 (Role) | 셀렉터 | 폰트 패밀리 | 크기 (Size) | 굵기 (Weight) | 행간 (Line-Height) | 자간 | 색상 | 예시 텍스트 |');
-    lines.push('| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |');
-    designSystem.typographyScale.forEach((t) => {
-      const shortFont = (t.fontFamily || '').split(',')[0].replace(/["']/g, '');
-      lines.push(`| **${t.role}** | \`${t.selector}\` | \`${shortFont}\` | \`${t.fontSize}\` | \`${t.fontWeight}\` | \`${t.lineHeight}\` | \`${t.letterSpacing}\` | \`${t.color}\` | "${t.sampleText}" |`);
-    });
-    lines.push('');
-  }
-
-  // CSS Variables
-  if (designSystem.cssVariables.length > 0) {
-    lines.push('### 2.4 CSS 커스텀 프로퍼티 (Design Tokens `:root`)');
-    lines.push('```css');
-    lines.push(':root {');
-    designSystem.cssVariables.slice(0, 40).forEach((v) => {
-      lines.push(`  ${v.name}: ${v.value};`);
-    });
-    lines.push('}');
-    lines.push('```');
-    lines.push('');
-  }
-
-  if (designSystem.mediaBreakpoints.length > 0) {
-    lines.push(`- **반응형 미디어쿼리 브레이크포인트**: ${designSystem.mediaBreakpoints.map((b) => `\`${b}\``).join(', ')}`);
-    lines.push('');
-  }
-
-  lines.push('---');
-  lines.push('');
-
-  // 3. How It Works & 3D Models / Assets
-  lines.push('## 3. ⚙️ 작동 원리 & 🧊 3D 모델 / 인터랙티브 에셋 정밀 분석');
-  lines.push('');
-
-  // 3.1 3D Models & WebGL Summary
-  lines.push('### 3.1 3D 모델, WebGL 캔버스 및 미디어 에셋 출처 ("3D 모델은 어디꺼고 어떻게 렌더링되는가")');
-  lines.push('');
-
-  const hasCanvases = howItWorks.canvases && howItWorks.canvases.length > 0;
-  const has3DModels = networkAssets.models3D && networkAssets.models3D.length > 0;
-  const hasBinaryBuffers = networkAssets.binaryBuffers && networkAssets.binaryBuffers.length > 0;
-  const hasEmbeddedViewers = howItWorks.embeddedViewers && howItWorks.embeddedViewers.length > 0;
-  const hasShaders = howItWorks.runtimeHooks && howItWorks.runtimeHooks.shaders && howItWorks.runtimeHooks.shaders.length > 0;
-
-  if (!hasCanvases && !has3DModels && !hasEmbeddedViewers) {
-    lines.push('- 이 페이지는 별도의 WebGL `<canvas>`나 외부 3D 모델(`.glb`, `.gltf`, `.splinecode`)을 사용하지 않고 DOM/CSS/이미지 기반으로 구성되어 있습니다.');
-    lines.push('');
-  } else {
-    if (hasCanvases) {
-      lines.push('#### 🖥️ DOM 상의 3D / 그래픽 `<canvas>` 레이어 구조');
-      howItWorks.canvases.forEach((c) => {
-        lines.push(`- **Canvas #${c.index} (\`${c.selector}\`, 부모: \`${c.parentSelector}\`)**`);
-        lines.push(`  - **렌더링 컨텍스트**: \`${c.contextType}\`${c.engineAttr ? ` (엔진 속성: \`${c.engineAttr}\`)` : ''}`);
-        lines.push(`  - **크기 및 배치**: \`${c.dimensions}\`, \`position: ${c.position}\`, \`z-index: ${c.zIndex}\`, \`pointer-events: ${c.pointerEvents}\``);
-        lines.push(`  - **작동 역할**: ${c.roleDescription}`);
-      });
-      lines.push('');
+    for (const [sel, vars] of bySel.entries()) {
+      push(`${sel} {`);
+      vars.forEach((v) => push(`  ${v.name}: ${v.value};`));
+      push('}');
     }
-
-    if (hasEmbeddedViewers) {
-      lines.push('#### 🎬 인터랙티브 뷰어 / 비디오 / 임베드 컴포넌트 (`<spline-viewer>`, `<model-viewer>`, `<video>`, `<iframe>`)');
-      howItWorks.embeddedViewers.forEach((v) => {
-        lines.push(`- **${v.tag}** (\`${v.selector}\`, 크기: \`${v.dimensions}\`)`);
-        if (v.sourceUrl) lines.push(`  - **에셋/소스 URL**: \`${v.sourceUrl}\``);
-        if (v.attributes) lines.push(`  - **속성(Attributes)**: \`${v.attributes}\``);
-      });
-      lines.push('');
-    }
-
-    if (has3DModels || hasBinaryBuffers) {
-      lines.push('#### 📦 네트워크에서 감지된 3D 모델 / 환경맵 / 텍스처 / 디코더 파일 출처');
-      lines.push('| 에셋 유형 (Type) | 제공 플랫폼 / 호스팅 출처 (Provider) | 크기 | 상세 설명 | 원본 파일 URL |');
-      lines.push('| :--- | :--- | :--- | :--- | :--- |');
-      networkAssets.models3D.forEach((m) => {
-        lines.push(`| **${m.type}** | **${m.provider}** | ${formatBytes(m.sizeBytes)} | ${m.description} | \`${m.url}\` |`);
-      });
-      networkAssets.binaryBuffers.forEach((b) => {
-        lines.push(`| **${b.type}** | **${b.provider}** | ${formatBytes(b.sizeBytes)} | 3D 지오메트리/애니메이션 바이너리 버퍼 | \`${b.url}\` |`);
-      });
-      lines.push('');
-    }
-
-    if (hasShaders) {
-      lines.push('#### ✨ 런타임에 캡처된 커스텀 GLSL 셰이더 (WebGL Vertex / Fragment Shaders)');
-      lines.push('> 페이지 로딩 중 GPU에 컴파일된 커스텀 GLSL 셰이더 코드입니다 (물결, 왜곡, 파티클, 커스텀 라이팅 효과 등):');
-      lines.push('');
-      howItWorks.runtimeHooks.shaders.slice(0, 4).forEach((sh, i) => {
-        lines.push(`##### Shader #${i + 1}: ${sh.type} (${sh.length} chars)`);
-        lines.push('```glsl');
-        lines.push(sh.source.slice(0, 1200));
-        lines.push('```');
-      });
-      lines.push('');
-    }
+    push('```', '');
   }
 
-  // Lottie / Rive / Video assets
-  if (networkAssets.animations.length > 0 || networkAssets.videos.length > 0) {
-    lines.push('### 3.2 모션 그래픽(Lottie/Rive) 및 배경 비디오 에셋');
-    networkAssets.animations.forEach((a) => {
-      lines.push(`- **[${a.type}]** 출처: **${a.provider}** (${formatBytes(a.sizeBytes)}) -> \`${a.url}\``);
+  // 3. How it works / 3D
+  push('## 3. 작동 원리 · 3D · 모션', '');
+
+  push('### 3.1 캔버스 / 3D 렌더링 레이어', '');
+  const contexts = (hw.runtimeHooks && hw.runtimeHooks.webglContexts) || [];
+  if (contexts.length) push(`- **생성된 렌더링 컨텍스트**: ${contexts.slice(0, 10).map((c) => `\`${c.type}\``).join(', ')}`);
+  if (hw.canvases.length) {
+    hw.canvases.forEach((c) => {
+      push(`- **Canvas #${c.index}** ${code(c.selector)} (경로: ${code(c.ancestorPath || c.parentSelector)})`);
+      push(`  - 컨텍스트 ${code(c.contextType)}, 크기 ${c.dimensions}, position ${code(c.position)}, z-index ${code(c.zIndex)}, pointer-events ${code(c.pointerEvents)}${c.webglRenderer ? `, GPU ${code(c.webglRenderer)}` : ''}`);
+      push(`  - 해석: ${c.roleDescription}`);
     });
-    networkAssets.videos.forEach((v) => {
-      lines.push(`- **[${v.type}]** 출처: **${v.provider}** (${formatBytes(v.sizeBytes)}) -> \`${v.url}\``);
-    });
-    lines.push('');
+  } else push('- `<canvas>` 없음 (DOM/CSS/이미지 기반 페이지)');
+  push('');
+
+  if (hw.embeddedViewers.length) {
+    push('### 3.2 임베드 / 뷰어 / 비디오', '');
+    hw.embeddedViewers.forEach((v) => push(`- **${v.tag}** ${code(v.selector)} ${v.dimensions}${v.sourceUrl ? ` — src: ${v.sourceUrl}` : ''}${v.attributes ? ` — ${code(v.attributes)}` : ''}`));
+    push('');
   }
 
-  // 3.3 Scroll, Event Listeners, Sticky Scrollytelling & CSS Animations
-  lines.push('### 3.3 인터랙션 & 스크롤 작동 메커니즘 ("이게 어떻게 작동하는가")');
-  lines.push('');
+  push('### 3.3 3D 모델 · 텍스처 · 디코더 (네트워크에서 실제 로드된 것)', '');
+  const models = [...na.models3D, ...na.binaryBuffers];
+  if (models.length) {
+    push('| 유형 | 출처 (호스팅) | 크기 | URL |', '| :--- | :--- | :--- | :--- |');
+    models.slice(0, 80).forEach((m) => push(`| ${cell(m.type)} | ${cell(m.provider)} | ${formatBytes(m.sizeBytes)} | ${cell(m.url.split('?')[0])} |`));
+    if (models.length > 80) push(`| … | | | 외 ${models.length - 80}개 (04_structured_data.json 참고) |`);
+  } else push('- 로드된 3D 모델 파일 없음');
+  push('');
 
-  const winEvents = (howItWorks.runtimeHooks && howItWorks.runtimeHooks.eventListeners && howItWorks.runtimeHooks.eventListeners.windowEvents) || {};
-  const docEvents = (howItWorks.runtimeHooks && howItWorks.runtimeHooks.eventListeners && howItWorks.runtimeHooks.eventListeners.documentEvents) || {};
-  const eventKeys = Array.from(new Set([...Object.keys(winEvents), ...Object.keys(docEvents)]));
-
-  if (eventKeys.length > 0) {
-    lines.push('#### 🎯 전역 이벤트 리스너 작동 감지');
-    eventKeys.forEach((ev) => {
-      const count = (winEvents[ev] || 0) + (docEvents[ev] || 0);
-      let explanation = '';
-      if (ev === 'wheel') explanation = '-> 마우스 휠 입력을 가로채어 커스텀 스무스 스크롤이나 3D 카메라 이동을 제어함';
-      else if (ev === 'scroll') explanation = '-> 스크롤 진행도(Scroll Progress)에 따라 요소 위치/투명도/네비게이션 상태를 실시간 업데이트함';
-      else if (ev === 'mousemove' || ev === 'pointermove') explanation = '-> 마우스 커서 위치를 추적하여 3D 모델 시선 회전, 패럴랙스 기울기(Tilt), 또는 커스텀 커서 효과를 연출함';
-      else if (ev === 'resize') explanation = '-> 뷰포트 리사이즈 시 캔버스 종횡비(Aspect Ratio) 및 레이아웃 계산을 갱신함';
-      lines.push(`- \`${ev}\` 리스너 (${count}개 등록됨) ${explanation}`);
-    });
-    lines.push('');
+  const refAssets = (referencedAssets || []).filter((r) => !models.some((m) => m.url.split('?')[0] === r.resolvedUrl.split('?')[0]));
+  if (refAssets.length) {
+    push('### 3.4 코드/HTML 안에서 참조된 3D·모션·미디어 경로', '');
+    push('> 방문 중 로드되지 않았더라도 소스에 경로가 적혀 있는 에셋입니다 (인터랙션/다른 페이지에서 로드될 수 있음).', '');
+    push('| 종류 | 경로 | 발견 위치 |', '| :--- | :--- | :--- |');
+    refAssets.slice(0, 60).forEach((r) => push(`| ${r.kind} (${r.ext}) | ${cell(r.resolvedUrl)} | ${cell(r.foundIn)} |`));
+    push('');
   }
 
-  if (howItWorks.stickyAndFixedElements && howItWorks.stickyAndFixedElements.length > 0) {
-    lines.push('#### 📌 고정 레이어(Fixed) 및 스크롤리텔링(Sticky Pinning) 작동 구조');
-    howItWorks.stickyAndFixedElements.forEach((st) => {
-      lines.push(`- **\`${st.selector}\`** (\`position: ${st.position}\`, \`top: ${st.top}\`, \`z-index: ${st.zIndex}\`, 크기: \`${st.dimensions}\`)`);
-      lines.push(`  - **작동 방식**: ${st.mechanism} (부모 컨테이너: \`${st.parentSelector}\`, 트랙 높이: \`${st.parentTrackHeight}\`)`);
-    });
-    lines.push('');
+  if (na.animations.length || na.videos.length) {
+    push('### 3.5 모션 그래픽 / 비디오 에셋', '');
+    na.animations.forEach((a) => push(`- **${a.type}** — ${a.provider} (${formatBytes(a.sizeBytes)}) ${a.url.split('?')[0]}`));
+    na.videos.slice(0, 15).forEach((v) => push(`- **${v.type}** — ${v.provider} (${formatBytes(v.sizeBytes)}) ${v.url.split('?')[0]}`));
+    push('');
   }
 
-  if (howItWorks.keyframes && howItWorks.keyframes.length > 0) {
-    lines.push('#### 🎞️ CSS `@keyframes` 애니메이션 규칙');
-    howItWorks.keyframes.slice(0, 12).forEach((kf) => {
-      lines.push(`- **\`@keyframes ${kf.name}\`**: \`${kf.cssText}\``);
+  const shaders = (hw.runtimeHooks && hw.runtimeHooks.shaders) || [];
+  if (shaders.length || na.shaders.length) {
+    push('### 3.6 런타임에 캡처된 셰이더', '');
+    push(`> 총 ${shaders.length}개 캡처 (엔진 기본 셰이더 포함). 앞의 일부만 표시하며 전체는 04_structured_data.json에 있습니다.`, '');
+    shaders.slice(0, 4).forEach((s, i) => {
+      push(`**Shader #${i + 1} — ${s.type} (${s.length} chars)**`, '', '```' + (s.type.startsWith('WGSL') ? 'wgsl' : 'glsl'));
+      push(s.source.slice(0, 1800) + (s.source.length > 1800 ? '\n// ... (생략)' : ''));
+      push('```', '');
     });
-    lines.push('');
+    na.shaders.forEach((s) => push(`- 외부 셰이더 파일: ${s.url}`));
+    push('');
   }
 
-  if (howItWorks.animatedElements && howItWorks.animatedElements.length > 0) {
-    lines.push('#### ⚡ 주요 애니메이션 / 트랜지션 / 스크롤 속성 적용 요소');
-    howItWorks.animatedElements.slice(0, 15).forEach((ae) => {
+  push('### 3.7 인터랙션 / 스크롤 메커니즘', '');
+  const ev = (hw.runtimeHooks && hw.runtimeHooks.eventListeners) || {};
+  const evRows = [];
+  for (const [scope, label] of [['windowEvents', 'window'], ['documentEvents', 'document'], ['elementEvents', '요소']]) {
+    for (const [type, count] of Object.entries(ev[scope] || {})) evRows.push({ scope: label, type, count });
+  }
+  if (evRows.length) {
+    push('| 대상 | 이벤트 | 리스너 수 | 의미 |', '| :--- | :--- | :--- | :--- |');
+    evRows.sort((a, b) => b.count - a.count).forEach((r) => push(`| ${r.scope} | \`${r.type}\` | ${r.count} | ${explainEvent(r.type)} |`));
+    push('');
+  }
+  if (hw.stickyAndFixedElements.length) {
+    push('**고정(fixed) / 스티키(sticky) 요소**', '');
+    hw.stickyAndFixedElements.forEach((s) => push(`- ${code(s.selector)} — ${s.position}, top ${s.top}, z ${s.zIndex}, ${s.dimensions}: ${s.mechanism}`));
+    push('');
+  }
+  if (hw.scrollSnap && hw.scrollSnap.length) push(`- **scroll-snap**: ${hw.scrollSnap.map((s) => `${code(s.selector)} ${code(s.scrollSnapType)}`).join(', ')}`, '');
+  if (hw.keyframes.length) {
+    push('**CSS @keyframes**', '');
+    hw.keyframes.slice(0, 15).forEach((k) => push(`- ${code(k.cssText)}`));
+    if (hw.keyframes.length > 15) push(`- … 외 ${hw.keyframes.length - 15}개 (03_styles_and_tokens.css)`);
+    push('');
+  }
+  if (hw.animatedElements.length) {
+    push('**애니메이션 / 트랜지션 / 스크롤 속성이 걸린 요소**', '');
+    hw.animatedElements.slice(0, 18).forEach((a) => {
       const parts = [];
-      if (ae.animationName) parts.push(`애니메이션: \`${ae.animationName}\``);
-      if (ae.transition) parts.push(`트랜지션: \`${ae.transition}\``);
-      if (ae.transform) parts.push(`변형(Transform): \`${ae.transform}\``);
-      if (ae.dataAttributes) parts.push(`모션 데이터 속성: \`${ae.dataAttributes}\``);
-      lines.push(`- **\`${ae.selector}\`**: ${parts.join(' | ')}`);
+      if (a.animationName) parts.push(`animation ${code(a.animationName)}`);
+      if (a.transition) parts.push(`transition ${code(a.transition)}`);
+      if (a.transform) parts.push(`transform ${code(a.transform)}`);
+      if (a.willChange) parts.push(`will-change ${code(a.willChange)}`);
+      if (a.dataAttributes) parts.push(`속성 ${code(a.dataAttributes)}`);
+      push(`- ${code(a.selector)}: ${parts.join(' · ')}`);
     });
-    lines.push('');
+    push('');
+  }
+  if (hw.hoverRules && hw.hoverRules.length) {
+    push('**CSS `:hover` 인터랙션 상태 규칙**', '');
+    hw.hoverRules.slice(0, 20).forEach((hr) => push(`- ${code(hr.selector)} → ${code(hr.declarations)}`));
+    push('');
   }
 
-  lines.push('---');
-  lines.push('');
+  // 4. Structure
+  push('## 4. 사이트 / 페이지 구조', '');
+  if (structure) {
+    if (structure.navigation.length) {
+      push('### 4.1 내비게이션', '');
+      structure.navigation.slice(0, 30).forEach((n) => push(`- ${n.text} → \`${n.href || '-'}\`${n.inHeader ? '' : ' (nav)'}`));
+      push('');
+    }
+    if (structure.internalPages.length) {
+      push(`### 4.2 내부 페이지 링크 (${structure.internalPages.length}개)`, '');
+      push(structure.internalPages.slice(0, 60).map((p) => `\`${p.path}\``).join(', '), '');
+    }
+    if (structure.headingOutline.length) {
+      push('### 4.3 헤딩 아웃라인', '');
+      structure.headingOutline.forEach((h) => push(`${'  '.repeat(h.level - 1)}- H${h.level}: ${h.text}`));
+      push('');
+    }
+  }
 
-  // 4. Section-by-Section Anatomy
-  lines.push('## 4. 📐 페이지 상단~하단 섹션별 구조 해부 (Section-by-Section Anatomy)');
-  lines.push('');
-  if (sections && sections.length > 0) {
-    sections.forEach((sec, idx) => {
-      lines.push(`### [섹션 ${idx + 1}] \`${sec.selector}\` (Y위치: \`${sec.topY}px\`, 크기: \`${sec.dimensions}\` / \`${sec.viewportHeightRatio}\`)`);
-      lines.push(`- **레이아웃 방식**: ${sec.layoutPattern}`);
-      lines.push(`- **배경 및 패딩**: 배경 \`${sec.background}\` | 패딩 \`${sec.padding}\` | 포지션 \`${sec.position}\``);
-      if (sec.headings.length > 0) {
-        lines.push(`- **주요 타이틀/헤딩**: ${sec.headings.map((h) => `\`<${h.tag}>\` "${h.text}"`).join(' / ')}`);
+  push('### 4.4 섹션별 구조 (위 → 아래)', '');
+  if (sections.length) {
+    sections.forEach((s, i) => {
+      push(`#### [${i + 1}] ${code(s.selector)} — y=${s.topY}px, ${s.dimensions} (${s.viewportHeightRatio})`);
+      push(`- 레이아웃: ${s.layoutPattern}${s.containerMaxWidth ? ` / 컨테이너 max-width ${code(s.containerMaxWidth)}` : ''}`);
+      push(`- 배경 ${code(s.background)}${s.backgroundImage ? ` + ${code(s.backgroundImage)}` : ''}, padding ${code(s.padding)}, position ${code(s.position)}${s.hasStickyInside ? ' — **내부에 sticky 요소 (스크롤 고정 연출)**' : ''}`);
+      if (s.headings.length) push(`- 헤딩: ${s.headings.map((h) => `${h.tag} "${h.text}"`).join(' / ')}`);
+      if (s.buttons.length) push(`- 버튼: ${s.buttons.map((b) => `[${b}]`).join(' ')}`);
+      const m = s.mediaSummary;
+      if (m.images || m.svgs || m.videos || m.canvases) push(`- 미디어: 이미지 ${m.images}, SVG ${m.svgs}, 비디오 ${m.videos}, 캔버스/3D ${m.canvases}`);
+      if (s.textPreview) push(`- 텍스트: "${s.textPreview}"`);
+      if (screenshots && screenshots.scrollShots) {
+        const vh = data.viewport.height;
+        const idx = Math.floor(s.topY / vh);
+        const shot = idx === 0 ? screenshots.viewportPath : screenshots.scrollShots[idx - 1];
+        if (shot) push(`- 스크린샷: \`${shot}\``);
       }
-      if (sec.buttons.length > 0) {
-        lines.push(`- **버튼 / CTA 요소**: ${sec.buttons.map((b) => `"[${b}]"`).join(', ')}`);
-      }
-      const m = sec.mediaSummary;
-      if (m.canvases > 0 || m.videos > 0 || m.images > 0 || m.svgs > 0) {
-        lines.push(`- **포함된 미디어**: 3D/캔버스 ${m.canvases}개, 비디오 ${m.videos}개, 이미지 ${m.images}개, SVG 아이콘/그래픽 ${m.svgs}개`);
-      }
-      lines.push('');
+      push('');
     });
-  } else {
-    lines.push('- 단일 캔버스 또는 비정형 컨테이너로 구성된 페이지입니다.');
-    lines.push('');
+  } else push('- 섹션 구분 불가 (단일 캔버스/앱 형태)', '');
+
+  if (structure) {
+    if (structure.images.length) {
+      push('### 4.5 주요 이미지 (표시 크기 순)', '');
+      push('| 표시 크기 | 원본 크기 | object-fit | alt | src |', '| :--- | :--- | :--- | :--- | :--- |');
+      structure.images.forEach((im) => push(`| ${im.displayed} | ${im.natural} | ${cell(im.objectFit)} | ${cell(im.alt)} | ${cell(im.src)} |`));
+      push('');
+    }
+    if (structure.forms.length) {
+      push('### 4.6 폼', '');
+      structure.forms.forEach((f) => push(`- ${code(f.selector)} ${f.method} ${f.action || ''}: ${f.fields.join(', ') || '(필드 없음)'}`));
+      push('');
+    }
   }
 
-  lines.push('---');
-  lines.push('');
+  // 5. DOM tree
+  push('## 5. 시각적 DOM 트리', '');
+  push('> 단일 자식 래퍼는 `a > b`로 합쳐 표시. [flex-row / grid(Ncol) / pos:fixed / 3D/Canvas / anim:*] 배지는 계산된 스타일 기준.', '');
+  push('```text', renderAsciiDomTree(domTree), '```', '');
 
-  // 5. Visual DOM Hierarchy Tree
-  lines.push('## 5. 🌳 시각적 DOM 레이아웃 트리 (Visual DOM Hierarchy)');
-  lines.push('');
-  lines.push('```text');
-  lines.push(renderAsciiDomTree(domTree));
-  lines.push('```');
-  lines.push('');
-  lines.push('---');
-  lines.push('');
-
-  // 6. Sanitized HTML Core Preview & Privacy Summary
-  lines.push('## 6. 🔒 개인정보·보안 정제 리포트 및 핵심 마크업 스니펫');
-  lines.push('');
-  lines.push('### 보안 및 개인정보 자동 마스킹 내역 (Sanitization Report)');
-  lines.push(`- **제거된 광고/트래커/애널리틱스 스크립트**: ${privacyStats.removedTrackers}개`);
-  lines.push(`- **생략된 대규모 SSR 상태/인라인 스크립트 블롭**: ${privacyStats.removedInlineScripts}개`);
-  lines.push(`- **마스킹된 히든 인풋(\`<input type="hidden">\`) 및 CSRF 메타 토큰**: ${privacyStats.redactedHiddenInputs + privacyStats.redactedMetaTokens}개`);
-  lines.push(`- **AI 토큰 절약을 위해 축약된 Base64 데이터 및 초대형 SVG 경로**: ${privacyStats.truncatedBase64 + privacyStats.simplifiedSvgPaths}개`);
-  const redactedKeys = Object.entries(privacyStats.redactedItems || {});
-  if (redactedKeys.length > 0) {
-    lines.push(`- **민감 패턴 마스킹 상세**: ${redactedKeys.map(([k, v]) => `${k} (${v}건)`).join(', ')}`);
-  } else {
-    lines.push(`- **민감 패턴 마스킹 상세**: 노출된 API 키/이메일/세션 토큰 없음 (클린 상태)`);
+  // 6. External services
+  push('## 6. 외부 리소스 / 통신', '');
+  const hostCount = new Map();
+  na.scripts.forEach((s) => hostCount.set(s.host, (hostCount.get(s.host) || 0) + 1));
+  if (hostCount.size) {
+    push('**스크립트 호스트별 개수**: ' + Array.from(hostCount.entries()).sort((a, b) => b[1] - a[1]).slice(0, 12).map(([h, c]) => `${h} ×${c}`).join(', '), '');
   }
-  lines.push('');
-  lines.push('### 정제된 HTML 마크업 핵심 구조 (Sanitized HTML Preview)');
-  lines.push('> 전체 정제된 HTML 소스는 `02_sanitized_source.html`, 전체 CSS는 `03_styles_and_tokens.css` 파일을 참고하세요.');
-  lines.push('');
-  lines.push('```html');
-  // Include a clean preview (up to 9,000 chars) inside the Master Blueprint so even a single file copy gives the AI real markup!
-  const htmlPreview = sanitizedHtml.length > 9000
-    ? sanitizedHtml.slice(0, 9000) + '\n<!-- ... [전체 코드는 02_sanitized_source.html 파일에 저장되어 있습니다] ... -->'
-    : sanitizedHtml;
-  lines.push(htmlPreview);
-  lines.push('```');
-  lines.push('');
+  if (na.apiEndpoints.length) {
+    push('**런타임 API 호출 (fetch/XHR, 쿼리 제거)**', '');
+    na.apiEndpoints.slice(0, 25).forEach((a) => push(`- ${a.method} ${a.endpoint}${a.firstParty ? '' : ' (외부)'}`));
+    push('');
+  }
+  if (structure && structure.externalDomains.length) push(`**외부 링크 도메인**: ${structure.externalDomains.map((d) => `${d.value}(${d.count})`).join(', ')}`, '');
 
+  // 7. Source code
+  push('## 7. 소스코드 & 정제 리포트', '');
+  if (savedScripts && savedScripts.length) {
+    push('### 7.1 저장된 JS (`05_scripts/`)', '');
+    push('| 파일 | 구분 | 원본 크기 | 출처 |', '| :--- | :--- | :--- | :--- |');
+    savedScripts.forEach((s) => push(`| \`${s.fileName}\` | ${s.firstParty ? '자체' : '외부'} | ${formatBytes(s.rawBytes)} | ${cell(s.sourceUrl.split('?')[0])} |`));
+    const skipped = na.scripts.filter((s) => s.saved && s.saved.startsWith('skipped'));
+    if (skipped.length) {
+      push('', `> 저장 생략 ${skipped.length}개 (크기 제한 등): ` + skipped.slice(0, 10).map((s) => `${s.url.split('?')[0].split('/').pop()} (${s.saved.replace('skipped: ', '')})`).join(', '));
+    }
+    push('');
+  }
+
+  push('### 7.2 정제(보안) 리포트', '');
+  push(`- 제거된 광고/분석 트래커: ${privacyStats.removedTrackers}개`);
+  push(`- SSR 상태 데이터/대형 인라인 스크립트 분리·제거: ${privacyStats.removedInlineScripts}개`);
+  push(`- 히든 인풋 / CSRF·인증 메타 토큰 마스킹: ${privacyStats.redactedHiddenInputs + privacyStats.redactedMetaTokens}개`);
+  push(`- Base64·대형 SVG path 축약: ${privacyStats.truncatedBase64 + privacyStats.simplifiedSvgPaths}개`);
+  const red = Object.entries(privacyStats.redactedItems || {});
+  push(`- 패턴 마스킹: ${red.length ? red.map(([k, v]) => `${k} ${v}건`).join(', ') : '없음'}`, '');
+
+  push('### 7.3 HTML 미리보기 (앞부분)', '');
+  push('> 전체는 `02_sanitized_source.html`.', '');
+  const preview = sanitizedHtml.length > 6000 ? sanitizedHtml.slice(0, 6000) + '\n<!-- ... (이하 02_sanitized_source.html) ... -->' : sanitizedHtml;
+  push('```html', preview, '```', '');
+
+  return L.join('\n');
+}
+
+/**
+ * Renders a componentSpecTree node recursively into a concise CSS-annotated tree for 1:1 cloning
+ */
+function renderComponentSpecTree(node, indent = '') {
+  if (!node) return '';
+  const lines = [];
+  const styleEntries = Object.entries(node.styles || {}).map(([k, v]) => `${k}: ${v}`).join('; ');
+  const extra = [];
+  if (node.text) extra.push(`text="${node.text}"`);
+  if (node.href) extra.push(`href="${node.href}"`);
+  if (node.imgSrc) extra.push(`src="${node.imgSrc}"`);
+
+  lines.push(`${indent}- \`${node.selector}\` [${node.box}]${extra.length ? ' ' + extra.join(' ') : ''}`);
+  if (styleEntries) {
+    lines.push(`${indent}  - CSS: \`${styleEntries}\``);
+  }
+  for (const ch of node.children || []) {
+    lines.push(renderComponentSpecTree(ch, indent + '  '));
+  }
   return lines.join('\n');
 }
 
 /**
- * Saves all generated AI reference artifacts to the output directory
+ * Generates 06_section_cloning_specs.md: Section-by-Section 1:1 Pixel-Perfect Cloning Guide
+ */
+function generateSectionCloningSpecsMarkdown(data) {
+  const { targetUrl, metadata, sections = [], screenshots } = data;
+  const L = [];
+  L.push(`# 섹션별 1:1 완벽 복제 명세서 (Section-by-Section Cloning Specs)`);
+  L.push('');
+  L.push(`> **대상 사이트**: ${metadata.title || targetUrl} (\`${targetUrl}\`)`);
+  L.push(`> **[AI에게]** 이 파일은 페이지의 상단부터 하단까지 각 섹션을 **1:1로 동일하게 구현**할 수 있도록, 각 섹션의 레이아웃 수치, 내부 하위 컴포넌트들의 실제 계산된 CSS 스타일(Computed Styles), 그리고 정제된 섹션별 HTML 마크업을 순서대로 담고 있습니다.`);
+  L.push(`> CSS Modules나 난독화된 클래스명 때문에 스타일 매칭이 어렵더라도 아래 **하위 요소별 계산된 CSS 트리**의 정확한 수치(px, HEX, flex/grid, font-size, gap, padding, border-radius 등)를 그대로 적용하면 원본과 100% 동일한 화면이 만들어집니다.`);
+  L.push('');
+  L.push('---');
+  L.push('');
+
+  if (!sections.length) {
+    L.push('분리된 섹션이 없는 단일 캔버스 페이지입니다. `02_sanitized_source.html`과 `01_AI_MASTER_BLUEPRINT.md`를 참고하세요.');
+    return L.join('\n');
+  }
+
+  sections.forEach((s, idx) => {
+    L.push(`## [섹션 ${idx + 1}] \`${s.selector}\``);
+    L.push('');
+    L.push(`### 1) 섹션 박스 모델 & 레이아웃 요약`);
+    L.push(`- **위치 및 크기**: Y=${s.topY}px, 크기 \`${s.dimensions}\` (뷰포트 높이 대비 \`${s.viewportHeightRatio}\`)`);
+    L.push(`- **레이아웃 구조**: ${s.layoutPattern}${s.containerMaxWidth ? ` (내부 컨테이너 \`max-width: ${s.containerMaxWidth}\`)` : ''}`);
+    L.push(`- **배경 / 테두리 / 여백**: background \`${s.background}\`${s.backgroundImage ? `, background-image \`${s.backgroundImage}\`` : ''}, padding \`${s.padding}\`${s.borderRadius ? `, border-radius \`${s.borderRadius}\`` : ''}${s.border ? `, border \`${s.border}\`` : ''}${s.boxShadow ? `, box-shadow \`${s.boxShadow}\`` : ''}`);
+    if (screenshots && screenshots.scrollShots) {
+      const vh = data.viewport.height || 900;
+      const shotIdx = Math.floor(s.topY / vh);
+      const shot = shotIdx === 0 ? screenshots.viewportPath : screenshots.scrollShots[shotIdx - 1];
+      if (shot) L.push(`- **대응 스크린샷 레퍼런스**: \`${shot}\``);
+    }
+    L.push('');
+
+    if (s.componentSpecTree) {
+      L.push(`### 2) 하위 요소별 계산된 CSS 수치 트리 (Computed Style Spec)`);
+      L.push(renderComponentSpecTree(s.componentSpecTree));
+      L.push('');
+    }
+
+    if (s.sectionHtmlSnippet) {
+      L.push(`### 3) 섹션 정제 HTML 마크업`);
+      L.push('```html');
+      L.push(s.sectionHtmlSnippet);
+      L.push('```');
+      L.push('');
+    }
+    L.push('---');
+    L.push('');
+  });
+
+  return L.join('\n');
+}
+
+/**
+ * Generates 07_svg_icons_and_graphics.md: Extracted SVG Logos & Vector Icons
+ */
+function generateSvgCatalogMarkdown(data) {
+  const svgs = (data.structure && data.structure.svgCatalog) || [];
+  const L = [];
+  L.push(`# 페이지 내 고유 SVG 로고 & 아이콘 벡터 코드 모음`);
+  L.push('');
+  L.push(`> **[AI에게]** 원본 사이트에서 추출한 고유 \`<svg>\` 요소 ${svgs.length}개입니다. 로고, 네비게이션 아이콘, 버튼 화살표, 장식 그래픽을 재현할 때 임의의 아이콘으로 대체하지 말고 아래 원본 \`<svg>\` 코드를 그대로 복사해 사용하세요.`);
+  L.push('');
+
+  svgs.forEach((item, idx) => {
+    L.push(`## SVG #${idx + 1}: \`${item.selector}\` (${item.dimensions})`);
+    L.push(`- **배치된 부모 컨텍스트**: ${item.parentContext}`);
+    if (item.viewBox) L.push(`- **viewBox**: \`${item.viewBox}\``);
+    L.push('```html');
+    L.push(item.svgCode);
+    L.push('```');
+    L.push('');
+  });
+
+  return L.join('\n');
+}
+
+/**
+ * Saves all AI reference artifacts to outputDir
  */
 function saveBlueprintFiles(analysisData, outputDir) {
   fs.mkdirSync(outputDir, { recursive: true });
+  const files = [];
+  const write = (rel, content, description) => {
+    const p = path.join(outputDir, rel);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, content, 'utf8');
+    files.push({ name: rel, description, size: fs.statSync(p).size });
+  };
 
   const masterMarkdown = generateMasterBlueprintMarkdown(analysisData);
-  const masterPath = path.join(outputDir, '01_AI_MASTER_BLUEPRINT.md');
-  fs.writeFileSync(masterPath, masterMarkdown, 'utf8');
+  write('01_AI_MASTER_BLUEPRINT.md', masterMarkdown, 'AI 전달용 통합 마스터 블루프린트');
+  write('02_sanitized_source.html', analysisData.sanitizedHtml || '', '정제된 전체 HTML (절대경로 변환됨)');
+  write('03_styles_and_tokens.css', `/* Sanitized styles for: ${analysisData.targetUrl}\n * Generated: ${analysisData.analyzedAt} */\n\n` + (analysisData.sanitizedCss || ''), '외부/인라인 CSS 전체');
 
-  const htmlPath = path.join(outputDir, '02_sanitized_source.html');
-  fs.writeFileSync(htmlPath, analysisData.sanitizedHtml || '', 'utf8');
+  const sectionSpecsMd = generateSectionCloningSpecsMarkdown(analysisData);
+  write('06_section_cloning_specs.md', sectionSpecsMd, '섹션별 1:1 복제 명세서 (하위 요소별 계산된 CSS 트리 + 섹션 HTML)');
 
-  const cssHeader = [
-    '/**',
-    ` * Sanitized Styles & Design Tokens for: ${analysisData.targetUrl}`,
-    ` * Generated at: ${analysisData.analyzedAt}`,
-    ' */',
-    ''
-  ].join('\n');
-  const cssPath = path.join(outputDir, '03_styles_and_tokens.css');
-  fs.writeFileSync(cssPath, cssHeader + (analysisData.sanitizedCss || ''), 'utf8');
+  const svgs = (analysisData.structure && analysisData.structure.svgCatalog) || [];
+  if (svgs.length > 0) {
+    const svgMd = generateSvgCatalogMarkdown(analysisData);
+    write('07_svg_icons_and_graphics.md', svgMd, `원본 SVG 로고·아이콘 ${svgs.length}개 벡터 코드 모음`);
+  }
 
-  // Create structured JSON without duplicating full HTML/CSS strings inside the JSON
-  const jsonReport = {
-    targetUrl: analysisData.targetUrl,
-    analyzedAt: analysisData.analyzedAt,
-    viewport: analysisData.viewport,
-    screenshots: analysisData.screenshots,
-    metadata: analysisData.metadata,
-    techStack: analysisData.techStack,
-    designSystem: analysisData.designSystem,
-    howItWorks: analysisData.howItWorks,
-    networkAssets: analysisData.networkAssets,
-    sections: analysisData.sections,
-    domTree: analysisData.domTree,
-    privacyStats: analysisData.privacyStats
-  };
+  // Strip bulky sectionHtmlSnippet from JSON to avoid duplication
+  const cleanSections = (analysisData.sections || []).map(({ sectionHtmlSnippet, ...s }) => s);
+  const { sanitizedHtml, sanitizedCss, savedScripts, ...rest } = analysisData;
+  const json = { ...rest, sections: cleanSections, savedScripts: (savedScripts || []).map(({ code, ...meta }) => meta) };
+  write('04_structured_data.json', JSON.stringify(json, null, 2), '구조화 분석 데이터 (JSON)');
 
-  const jsonPath = path.join(outputDir, '04_3d_and_interactions_data.json');
-  fs.writeFileSync(jsonPath, JSON.stringify(jsonReport, null, 2), 'utf8');
+  let scriptBytes = 0;
+  (savedScripts || []).forEach((s) => {
+    const p = path.join(outputDir, '05_scripts', s.fileName);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, s.code, 'utf8');
+    scriptBytes += fs.statSync(p).size;
+  });
+  if (savedScripts && savedScripts.length) {
+    files.push({ name: `05_scripts/ (${savedScripts.length}개)`, description: '정제된 JS 소스', size: scriptBytes });
+  }
 
-  return {
-    masterMarkdown,
-    files: [
-      { name: '01_AI_MASTER_BLUEPRINT.md', description: 'AI 프롬프트 입력용 통합 마스터 블루프린트 (디자인+구조+작동원리+3D출처+코드요약)', size: fs.statSync(masterPath).size },
-      { name: '02_sanitized_source.html', description: '민감 정보·트래커가 제거되고 정렬된 전체 HTML 소스코드', size: fs.statSync(htmlPath).size },
-      { name: '03_styles_and_tokens.css', description: '추출된 CSS 디자인 토큰(:root 변수), 키프레임 및 스타일시트', size: fs.statSync(cssPath).size },
-      { name: '04_3d_and_interactions_data.json', description: '3D 에셋, 셰이더, 레이아웃 트리, 테크스택 구조화 데이터 (JSON)', size: fs.statSync(jsonPath).size }
-    ]
-  };
+  return { masterMarkdown, files };
 }
 
 module.exports = {

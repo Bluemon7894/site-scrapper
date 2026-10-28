@@ -75,7 +75,8 @@ const SENSITIVE_REGEXES = [
   },
   {
     name: 'Phone Number (KR/Intl)',
-    regex: /\b(?:01[016789]-?\d{3,4}-?\d{4}|02-?\d{3,4}-?\d{4}|\+\d{1,3}[\s.-]?\(?\d{2,4}\)?[\s.-]?\d{3,4}[\s.-]?\d{4})\b/g,
+    // Separators are required so that long digit runs (IDs, timestamps, SVG coordinates) are not mangled
+    regex: /(?<![\w.])(?:01[016789][-.\s]\d{3,4}[-.\s]\d{4}|0(?:2|[3-6][1-5])[-.\s]\d{3,4}[-.\s]\d{4}|\+\d{1,3}[\s.-]\(?\d{1,4}\)?[\s.-]\d{3,4}[\s.-]\d{4})(?![\w.])/g,
     replacement: '[REDACTED_PHONE]'
   }
 ];
@@ -120,7 +121,7 @@ function isTrackerUrl(url) {
 /**
  * Sanitizes raw HTML string for safe, clean AI consumption
  */
-function sanitizeHtml(rawHtml) {
+function sanitizeHtml(rawHtml, baseUrl = '') {
   const stats = {
     removedTrackers: 0,
     removedInlineScripts: 0,
@@ -128,12 +129,27 @@ function sanitizeHtml(rawHtml) {
     redactedMetaTokens: 0,
     truncatedBase64: 0,
     simplifiedSvgPaths: 0,
+    extractedInlineScripts: [],
     redactedItems: {}
   };
 
   if (!rawHtml) return { html: '', stats };
 
   let html = rawHtml;
+
+  // Convert relative src / href / poster attributes to absolute URLs so assets work out-of-the-box when cloned
+  if (baseUrl) {
+    html = html.replace(/\b(src|href|poster|url)=(["'])([^"']+)\2/gi, (match, attr, quote, val) => {
+      const trimmed = val.trim();
+      if (!trimmed || /^(https?:|data:|blob:|mailto:|tel:|javascript:|#)/i.test(trimmed)) return match;
+      try {
+        const abs = new URL(trimmed, baseUrl).href;
+        return `${attr}=${quote}${abs}${quote}`;
+      } catch (e) {
+        return match;
+      }
+    });
+  }
 
   // 1. Remove tracking/analytics <script> tags and inline scripts that contain tracker signatures or massive webpack dumps
   html = html.replace(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi, (fullMatch, attrs, body) => {
@@ -166,16 +182,27 @@ function sanitizeHtml(rawHtml) {
       return '<!-- [REMOVED_INLINE_TRACKER_SCRIPT] -->';
     }
 
-    // Remove Next.js / Nuxt hydration state blobs that may hold user/session data or bloat tokens
-    if (/__NEXT_DATA__|__NUXT__|window\.__INITIAL_STATE__/i.test(trimmedBody) || attrs.includes('__NEXT_DATA__')) {
+    // Remove Next.js / Nuxt / RSC hydration state blobs that may hold user/session data or bloat tokens
+    if (
+      /__NEXT_DATA__|__NUXT__|window\.__INITIAL_STATE__|window\.__APOLLO_STATE__|window\.__PRELOADED_STATE__|self\.__next_f\.push|__remixContext|__sveltekit_/i.test(trimmedBody) ||
+      attrs.includes('__NEXT_DATA__')
+    ) {
       stats.removedInlineScripts++;
       return '<!-- [REDACTED_SSR_STATE_BLOB: Removed for privacy & AI token efficiency] -->';
     }
 
-    // If inline script is a custom animation/Three.js/GSAP logic and reasonably sized, keep a sanitized version
+    // Large inline JSON data blobs carry content/data, not logic -> drop
+    if (scriptType.includes('json') && trimmedBody.length > 3500) {
+      stats.removedInlineScripts++;
+      return `<!-- [INLINE_JSON_DATA_OMITTED (${trimmedBody.length} chars)] -->`;
+    }
+
+    // Large inline logic scripts are moved to separate files (05_scripts/inline_N.js) to keep the HTML readable
     if (trimmedBody.length > 3500) {
       stats.removedInlineScripts++;
-      return `<!-- [INLINE_SCRIPT_OMITTED (${trimmedBody.length} chars) - See 04_scripts_and_logic.md for analysis] -->`;
+      const fileName = `inline_${String(stats.extractedInlineScripts.length + 1).padStart(2, '0')}.js`;
+      stats.extractedInlineScripts.push({ fileName, code: redactSensitiveText(trimmedBody, stats) });
+      return `<!-- [INLINE_SCRIPT_MOVED (${trimmedBody.length} chars) -> 05_scripts/${fileName}] -->`;
     }
 
     const sanitizedBody = redactSensitiveText(trimmedBody, stats);
@@ -217,10 +244,10 @@ function sanitizeHtml(rawHtml) {
     return `data:${mime};base64,[BASE64_TRUNCATED_FOR_AI]`;
   });
 
-  // 6. Simplify huge SVG path `d="..."` strings (> 350 chars) so structure remains clear without 50KB of vector coordinates
-  html = html.replace(/\bd=["']([^"']{350,})["']/g, (match, dVal) => {
+  // 6. Keep normal SVG icons/logos intact; only truncate gigantic vector illustration paths (> 12,000 chars)
+  html = html.replace(/\bd=["']([^"']{12000,})["']/g, (match, dVal) => {
     stats.simplifiedSvgPaths++;
-    return `d="${dVal.slice(0, 80)}... [SVG_PATH_TRUNCATED_${dVal.length}_CHARS]"`;
+    return `d="${dVal.slice(0, 120)}... [SVG_PATH_TRUNCATED_${dVal.length}_CHARS]"`;
   });
 
   // 7. Run general sensitive regex redaction (emails, phones, API keys, JWTs, auth query params)
@@ -245,9 +272,23 @@ function sanitizeHtml(rawHtml) {
 /**
  * Sanitizes and formats CSS content
  */
-function sanitizeCss(rawCss, stats) {
+function sanitizeCss(rawCss, stats, baseUrl = '') {
   if (!rawCss) return '';
   let css = rawCss;
+
+  // Convert relative url(...) in CSS to absolute URLs against baseUrl
+  if (baseUrl && /^https?:\/\//i.test(baseUrl)) {
+    css = css.replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi, (match, quote, relUrl) => {
+      const trimmed = relUrl.trim();
+      if (!trimmed || /^(https?:|data:|blob:|#)/i.test(trimmed)) return match;
+      try {
+        const abs = new URL(trimmed, baseUrl).href;
+        return `url("${abs}")`;
+      } catch (e) {
+        return match;
+      }
+    });
+  }
 
   // Truncate long base64 fonts/images embedded in CSS
   css = css.replace(/data:([a-zA-Z0-9/+.-]+);base64,[A-Za-z0-9+/=]{120,}/g, (match, mime) => {
@@ -269,9 +310,42 @@ function sanitizeCss(rawCss, stats) {
   return css;
 }
 
+/**
+ * Sanitizes and (optionally) beautifies JavaScript source
+ * - Redacts secrets / PII
+ * - Truncates embedded base64 blobs
+ * - Beautifies only when the source is small enough for js-beautify to stay fast
+ */
+function sanitizeJs(rawJs, stats, { beautifyLimit = 700000 } = {}) {
+  if (!rawJs) return '';
+  let js = rawJs;
+
+  js = js.replace(/data:([a-zA-Z0-9/+.-]+);base64,[A-Za-z0-9+/=]{200,}/g, (match, mime) => {
+    if (stats) stats.truncatedBase64 = (stats.truncatedBase64 || 0) + 1;
+    return `data:${mime};base64,[BASE64_TRUNCATED]`;
+  });
+
+  js = redactSensitiveText(js, stats || { redactedItems: {} });
+
+  if (js.length <= beautifyLimit) {
+    try {
+      js = beautify.js(js, {
+        indent_size: 2,
+        max_preserve_newlines: 2,
+        wrap_line_length: 0
+      });
+    } catch (e) {
+      // Keep as-is
+    }
+  }
+
+  return js;
+}
+
 module.exports = {
   sanitizeHtml,
   sanitizeCss,
+  sanitizeJs,
   redactSensitiveText,
   isTrackerUrl
 };
