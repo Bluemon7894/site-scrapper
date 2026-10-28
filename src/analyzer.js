@@ -179,11 +179,12 @@ const { scanCodeSignatures, resolveAssetRefs, extractCssTokens } = require('./co
 
 const LIMITS = {
   scanScriptBytes: 25 * 1024 * 1024, // read & scan scripts up to 25MB for library signatures
-  saveScriptBytes: 800 * 1024, // save individual scripts up to 800KB (raw)
-  saveScriptsTotal: 15 * 1024 * 1024,
-  saveScriptsCount: 80,
-  cssFileBytes: 3 * 1024 * 1024,
-  maxScrollShots: 12
+  saveFirstPartyScriptBytes: 10 * 1024 * 1024, // save first-party scripts up to 10MB (core site logic)
+  saveThirdPartyScriptBytes: 1500 * 1024, // save third-party scripts up to 1.5MB
+  saveScriptsTotal: 25 * 1024 * 1024,
+  saveScriptsCount: 100,
+  cssFileBytes: 5 * 1024 * 1024,
+  maxScrollShots: 15
 };
 
 /**
@@ -658,8 +659,9 @@ async function analyzeSite(options, onProgress = () => {}) {
           s.entry.saved = 'skipped: count limit';
           continue;
         }
-        if (s.text.length > LIMITS.saveScriptBytes) {
-          s.entry.saved = `skipped: too large (${(s.text.length / 1024).toFixed(0)}KB)`;
+        const maxLimit = s.entry.firstParty ? LIMITS.saveFirstPartyScriptBytes : LIMITS.saveThirdPartyScriptBytes;
+        if (s.text.length > maxLimit) {
+          s.entry.saved = `skipped: too large (${(s.text.length / 1024).toFixed(0)}KB > ${(maxLimit / 1024).toFixed(0)}KB)`;
           continue;
         }
         if (total + s.text.length > LIMITS.saveScriptsTotal) {

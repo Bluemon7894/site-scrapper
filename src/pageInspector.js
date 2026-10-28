@@ -564,10 +564,15 @@ function inspectPage() {
   }
 
   function isVerticalStack(kids) {
-    for (let i = 1; i < kids.length; i++) {
-      const a = kids[i - 1].getBoundingClientRect();
-      const b = kids[i].getBoundingClientRect();
-      if (b.top < a.top + a.height * 0.5) return false;
+    const flowKids = kids.filter((k) => {
+      const pos = window.getComputedStyle(k).position;
+      return pos !== 'fixed' && pos !== 'absolute';
+    });
+    if (flowKids.length < 2) return true;
+    for (let i = 1; i < flowKids.length; i++) {
+      const a = flowKids[i - 1].getBoundingClientRect();
+      const b = flowKids[i].getBoundingClientRect();
+      if (b.top < a.top + a.height * 0.3) return false;
     }
     return true;
   }
@@ -579,7 +584,7 @@ function inspectPage() {
     else break;
   }
   let blocks = visibleKids(root);
-  for (let pass = 0; pass < 4; pass++) {
+  for (let pass = 0; pass < 6; pass++) {
     const next = [];
     let changed = false;
     for (const b of blocks) {
@@ -593,8 +598,13 @@ function inspectPage() {
         kids = visibleKids(inner);
       }
       const hasStickyChild = kids.some((k) => window.getComputedStyle(k).position === 'sticky');
-      const expandable = ['main', 'div', 'article'].includes(t) && r.height > vh * 1.8 && kids.length >= 2 && isVerticalStack(kids) && !hasStickyChild;
-      if (expandable && blocks.length + kids.length < 45) {
+      const hasExplicitSections = kids.some((k) => {
+        const kt = k.tagName.toLowerCase();
+        const kc = typeof k.className === 'string' ? k.className : '';
+        return kt === 'section' || kt === 'header' || kt === 'footer' || kt === 'main' || /\bsection\b/i.test(kc) || k.hasAttribute('data-section');
+      });
+      const expandable = ['main', 'div', 'article', 'body'].includes(t) && (r.height > vh * 1.5 || hasExplicitSections) && kids.length >= 2 && (isVerticalStack(kids) || hasExplicitSections) && !hasStickyChild;
+      if (expandable && blocks.length + kids.length < 50) {
         next.push(...kids);
         changed = true;
       } else {
