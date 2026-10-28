@@ -1,14 +1,12 @@
 {
-  "name": "siteblueprint-ai",
+  "name": "site-scrapper",
   "version": "1.0.0",
-  "description": "AI 참고용 웹사이트 디자인 시스템·구조·작동원리·3D모델 출처·정제 소스코드 추출 데스크톱 앱",
-  "main": "server.js",
+  "description": "AI 참고용 웹사이트 디자인·구조·작동원리·3D모델 출처·정제 소스코드 추출 CMD 도구",
+  "main": "index.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node index.js"
   },
   "dependencies": {
-    "archiver": "^7.0.1",
-    "express": "^5.1.0",
     "js-beautify": "^1.15.4",
     "playwright-core": "^1.51.1"
   }
