@@ -35,11 +35,13 @@ node index.js https://linear.app
 
 | 파일 / 폴더 | 내용 및 역할 |
 | :--- | :--- |
-| **`01_AI_MASTER_BLUEPRINT.md`** | AI 프롬프트용 통합 마스터 블루프린트 (기술 스택, 번들 정적 분석, 컬러/폰트/`@font-face`/CSS 변수, 3D·모션·`:hover` 작동 원리, 섹션 구조, 시각적 DOM 트리 통합) |
-| **`02_sanitized_source.html`** | 렌더링 완료 후의 전체 HTML (상대 경로 → 절대 URL 자동 변환, 트래커·개인정보 제거 및 코드 정렬) |
+| **`00_AI_COPY_PASTE_PROMPT.md`** | **AI 복사-붙여넣기 전용 프롬프트** (Claude 3.5 Sonnet, GPT-4o, Cursor 등에 파일과 함께 그대로 붙여넣는 마스터 지시서) |
+| **`01_AI_MASTER_BLUEPRINT.md`** | AI 전달용 통합 마스터 블루프린트 (기술 스택, 번들 정적 분석, 컬러/폰트/`@font-face`/CSS 변수, 3D·모션·`:hover` 작동 원리, 섹션 구조, 시각적 DOM 트리 통합) |
+| **`02_sanitized_source.html`** | 렌더링 완료 후의 전체 HTML (로컬 스타일시트 자동 연동, 상대 경로 → 절대 URL 자동 변환, 트래커·개인정보 제거 및 코드 정렬) |
 | **`03_styles_and_tokens.css`** | 외부/인라인 CSS 전체 (CORS 외부 스타일시트 포함, `url()` 절대 경로 변환 및 정렬) |
 | **`04_structured_data.json`** | 전체 분석 원본 구조화 데이터 (JSON) |
-| **`05_scripts/`** | 페이지에서 로드된 자체/외부 JS 스크립트 소스 (민감 정보 마스킹 및 정렬 완료) |
+| **`05_scripts/`** | 페이지에서 로드된 자체/외부 JS 스크립트 소스 (최대 10MB 퍼스트파티 번들 보존, 민감 정보 마스킹 및 정렬 완료) |
 | **`06_section_cloning_specs.md`** | **섹션별 1:1 복제 명세서** — 상단~하단 각 섹션의 박스 모델 수치, 모든 하위 요소의 실제 계산된 CSS 속성 트리(Computed Style Tree), 섹션별 정제 HTML 코드 |
 | **`07_svg_icons_and_graphics.md`** | 페이지 내 고유 `<svg>` 로고 및 아이콘의 원본 벡터 코드 모음 |
+| **`assets/`** | 페이지에서 감지된 3D 모델(`.glb`, `.gltf`), 환경맵(`.hdr`, `.exr`), 웹폰트(`.woff2`), Lottie 애니메이션(`.json`) 등 로컬 다운로드 에셋 (CORS 차단 없이 로컬에서 즉시 로드 가능) |
 | **`screenshots/`** | 첫 화면(`viewport_hero.png`), 스크롤 단계별(`scroll_*.png`), 전체 페이지(`fullpage.png`) 스크린샷 |

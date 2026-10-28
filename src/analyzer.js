@@ -361,9 +361,13 @@ async function analyzeSite(options, onProgress = () => {}) {
     // ------------------------------------------------------------------
     // Network sniffer
     // ------------------------------------------------------------------
+    const assetsDir = outputDir ? path.join(outputDir, 'assets') : null;
+    if (assetsDir) fs.mkdirSync(assetsDir, { recursive: true });
+
     const networkAssets = { models3D: [], animations: [], shaders: [], fonts: [], videos: [], scripts: [], stylesheets: [], binaryBuffers: [], apiEndpoints: [] };
     const capturedScripts = []; // { url, text }
     const capturedStyles = []; // { url, text }
+    const savedLocalAssets = []; // { name, localPath, sizeBytes, originalUrl, type }
     const seenUrls = new Set();
     const pending = new Set();
     const siteDomain = registrableDomain(new URL(targetUrl).hostname);
@@ -374,6 +378,39 @@ async function analyzeSite(options, onProgress = () => {}) {
         return false;
       }
     };
+
+    async function saveLocalAsset(item, defaultExt = '', res, url, len = 0) {
+      if (!assetsDir || !res) return;
+      if (len > 35 * 1024 * 1024) return;
+      try {
+        const buf = await res.body();
+        if (buf && buf.length > 0 && buf.length <= 35 * 1024 * 1024) {
+          const u = new URL(url);
+          let base = path.basename(u.pathname) || ('asset_' + Date.now() + defaultExt);
+          if (!path.extname(base) && defaultExt) base += defaultExt;
+          const safeName = base.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80);
+          let finalName = safeName;
+          let counter = 1;
+          while (fs.existsSync(path.join(assetsDir, finalName))) {
+            const ext = path.extname(safeName);
+            const nameWithoutExt = path.basename(safeName, ext);
+            finalName = `${nameWithoutExt}_${counter}${ext}`;
+            counter++;
+          }
+          const targetPath = path.join(assetsDir, finalName);
+          fs.writeFileSync(targetPath, buf);
+          item.localPath = `assets/${finalName}`;
+          item.sizeBytes = buf.length;
+          savedLocalAssets.push({
+            name: finalName,
+            localPath: `assets/${finalName}`,
+            sizeBytes: buf.length,
+            originalUrl: url,
+            type: item.type || item.category || 'asset'
+          });
+        }
+      } catch (e) {}
+    }
 
     async function handleResponse(response) {
       const reqUrl = response.url();
@@ -392,13 +429,18 @@ async function analyzeSite(options, onProgress = () => {}) {
       const cleanPath = reqUrl.toLowerCase().split('?')[0].split('#')[0];
 
       if (cleanPath.endsWith('.bin')) {
-        networkAssets.binaryBuffers.push({ url: cleanUrl, type: 'Binary Buffer (.bin - glTF geometry/animation buffer)', provider: detectHostProvider(reqUrl), sizeBytes: contentLength });
+        const item = { url: cleanUrl, type: 'Binary Buffer (.bin - glTF geometry/animation buffer)', provider: detectHostProvider(reqUrl), sizeBytes: contentLength };
+        await saveLocalAsset(item, '.bin', response, reqUrl, contentLength);
+        networkAssets.binaryBuffers.push(item);
         return;
       }
 
       const classification = classifyAsset(reqUrl, contentType, reqType);
       if (classification) {
         const item = { url: cleanUrl, ...classification, sizeBytes: contentLength, contentType };
+        if (['3d_model', '3d_env', '3d_texture', 'font', 'interactive_anim'].includes(classification.category)) {
+          await saveLocalAsset(item, '', response, reqUrl, contentLength);
+        }
         if (['3d_model', '3d_env', '3d_texture', '3d_engine_wasm'].includes(classification.category)) networkAssets.models3D.push(item);
         else if (classification.category === 'interactive_anim') networkAssets.animations.push(item);
         else if (classification.category === 'shader') {
@@ -428,11 +470,17 @@ async function analyzeSite(options, onProgress = () => {}) {
           if (!text || text.length > 6000000 || !text.trim().startsWith('{')) return;
           const head = text.slice(0, 2000);
           if (/"v"\s*:\s*"\d/.test(head) && /"fr"\s*:/.test(head) && /"layers"\s*:/.test(text.slice(0, 5000))) {
-            networkAssets.animations.push({ url: cleanUrl, category: 'interactive_anim', type: 'Lottie Vector Animation (.json)', provider: detectHostProvider(reqUrl), description: 'JSON 기반 Lottie 벡터 모션 데이터', sizeBytes: contentLength || text.length });
+            const item = { url: cleanUrl, category: 'interactive_anim', type: 'Lottie Vector Animation (.json)', provider: detectHostProvider(reqUrl), description: 'JSON 기반 Lottie 벡터 모션 데이터', sizeBytes: contentLength || text.length };
+            await saveLocalAsset(item, '.json', response, reqUrl, contentLength);
+            networkAssets.animations.push(item);
           } else if (/"metadata"\s*:\s*\{[^}]*"type"\s*:\s*"(Object|BufferGeometry|Geometry|Material)"/i.test(head) || /"geometries"\s*:\s*\[/.test(head)) {
-            networkAssets.models3D.push({ url: cleanUrl, category: '3d_model', type: 'Three.js Scene / Geometry JSON', provider: detectHostProvider(reqUrl), description: 'Three.js ObjectLoader / BufferGeometryLoader용 3D JSON', sizeBytes: contentLength || text.length });
+            const item = { url: cleanUrl, category: '3d_model', type: 'Three.js Scene / Geometry JSON', provider: detectHostProvider(reqUrl), description: 'Three.js ObjectLoader / BufferGeometryLoader용 3D JSON', sizeBytes: contentLength || text.length };
+            await saveLocalAsset(item, '.json', response, reqUrl, contentLength);
+            networkAssets.models3D.push(item);
           } else if (/"asset"\s*:\s*\{[^}]*"version"\s*:\s*"2\.0"/i.test(head) && /"meshes"|"nodes"|"scenes"/.test(head)) {
-            networkAssets.models3D.push({ url: cleanUrl, category: '3d_model', type: 'glTF 2.0 3D Asset (JSON)', provider: detectHostProvider(reqUrl), description: '동적 로드된 glTF 2.0 씬 데이터', sizeBytes: contentLength || text.length });
+            const item = { url: cleanUrl, category: '3d_model', type: 'glTF 2.0 3D Asset (JSON)', provider: detectHostProvider(reqUrl), description: '동적 로드된 glTF 2.0 씬 데이터', sizeBytes: contentLength || text.length };
+            await saveLocalAsset(item, '.gltf', response, reqUrl, contentLength);
+            networkAssets.models3D.push(item);
           }
         } catch (e) {}
         return;
@@ -497,31 +545,53 @@ async function analyzeSite(options, onProgress = () => {}) {
     } catch (e) {}
 
     // ------------------------------------------------------------------
-    // Scroll pass (wheel-driven so smooth-scroll libraries react too)
+    // Scroll pass (wheel-driven so smooth-scroll & virtual scroll libraries react too)
     // ------------------------------------------------------------------
     if (autoScroll) {
       onProgress('scroll', '페이지 끝까지 스크롤 (지연 로딩 에셋 / 스크롤 애니메이션 / 3D 씬 트리거)', 30);
       let lastY = -1;
       let still = 0;
       const started = Date.now();
-      for (let i = 0; i < 60 && Date.now() - started < 25000; i++) {
+
+      // Check if page uses virtual scroll (e.g. scrollY stays 0 but has tall fixed/relative containers or wheel listeners)
+      const isVirtualScroll = await page.evaluate(() => {
+        const hasTall = Array.from(document.querySelectorAll('*')).slice(0, 250).some((el) => {
+          const r = el.getBoundingClientRect();
+          return r.height > window.innerHeight * 2.5;
+        });
+        const hasWheel = !!(window.__SITESCRAP_HOOKS__ && (
+          window.__SITESCRAP_HOOKS__.eventListeners.windowEvents.wheel ||
+          window.__SITESCRAP_HOOKS__.eventListeners.documentEvents.wheel
+        ));
+        return hasTall || hasWheel;
+      }).catch(() => false);
+
+      const maxSteps = isVirtualScroll ? 35 : 60;
+
+      for (let i = 0; i < maxSteps && Date.now() - started < 30000; i++) {
         try {
-          if (mobile) await page.evaluate((d) => window.scrollBy(0, d), Math.round(viewport.height * 0.8));
-          else await page.mouse.wheel(0, Math.round(viewport.height * 0.8));
+          if (mobile) {
+            await page.evaluate((d) => window.scrollBy(0, d), Math.round(viewport.height * 0.8));
+          } else {
+            await page.mouse.wheel(0, Math.round(viewport.height * 0.9));
+          }
         } catch (e) {}
-        await page.waitForTimeout(300);
-        const y = await page.evaluate(() => window.scrollY).catch(() => 0);
-        if (Math.abs(y - lastY) < 2) {
-          still++;
-          if (still === 2) await page.evaluate((d) => window.scrollBy(0, d), Math.round(viewport.height * 0.8)).catch(() => {});
-          if (still >= 4) break;
-        } else still = 0;
-        lastY = y;
+        await page.waitForTimeout(250);
+
+        if (!isVirtualScroll) {
+          const y = await page.evaluate(() => window.scrollY).catch(() => 0);
+          if (Math.abs(y - lastY) < 2) {
+            still++;
+            if (still === 2) await page.evaluate((d) => window.scrollBy(0, d), Math.round(viewport.height * 0.8)).catch(() => {});
+            if (still >= 5) break;
+          } else still = 0;
+          lastY = y;
+        }
       }
-      await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+      await page.waitForLoadState('networkidle', { timeout: 4000 }).catch(() => {});
       await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
       try {
-        if (!mobile) for (let i = 0; i < 6; i++) await page.mouse.wheel(0, -5000);
+        if (!mobile) for (let i = 0; i < 8; i++) await page.mouse.wheel(0, -6000);
       } catch (e) {}
       await page.waitForTimeout(1200);
     }
@@ -680,6 +750,14 @@ async function analyzeSite(options, onProgress = () => {}) {
     }
     delete privacyStats.extractedInlineScripts;
 
+    if (assetsDir && fs.existsSync(assetsDir)) {
+      try {
+        if (fs.readdirSync(assetsDir).length === 0) {
+          fs.rmdirSync(assetsDir);
+        }
+      } catch (e) {}
+    }
+
     onProgress('done', '분석 완료', 90);
 
     return {
@@ -704,6 +782,7 @@ async function analyzeSite(options, onProgress = () => {}) {
       sanitizedHtml,
       sanitizedCss,
       savedScripts,
+      savedLocalAssets,
       privacyStats
     };
   } catch (err) {

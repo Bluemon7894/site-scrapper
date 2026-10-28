@@ -63,7 +63,7 @@ function explainEvent(ev) {
  * Generates the AI Master Blueprint markdown
  */
 function generateMasterBlueprintMarkdown(data) {
-  const { targetUrl, finalUrl, httpStatus, analyzedAt, viewport, mobile, metadata, techStack, codeLibraries, threeModules, designSystem: ds, howItWorks: hw, networkAssets: na, referencedAssets, structure, sections, domTree, sanitizedHtml, savedScripts, privacyStats, screenshots } = data;
+  const { targetUrl, finalUrl, httpStatus, analyzedAt, viewport, mobile, metadata, techStack, codeLibraries, threeModules, designSystem: ds, howItWorks: hw, networkAssets: na, referencedAssets, structure, sections, domTree, sanitizedHtml, savedScripts, savedLocalAssets, privacyStats, screenshots } = data;
 
   const L = [];
   const push = (...xs) => L.push(...xs);
@@ -75,14 +75,18 @@ function generateMasterBlueprintMarkdown(data) {
   // 0. File index
   push('## 0. 함께 제공되는 파일 (1:1 완벽 클론 패키지)', '');
   push('| 파일 | 내용 |', '| :--- | :--- |');
+  push('| `00_AI_COPY_PASTE_PROMPT.md` | **AI 복사-붙여넣기 전용 프롬프트** (ChatGPT/Claude/Cursor에 바로 전달) |');
   push('| `01_AI_MASTER_BLUEPRINT.md` | 이 문서 (전체 아키텍처 + 디자인 토큰 + 3D/모션 작동 원리 통합) |');
-  push('| `02_sanitized_source.html` | 렌더링 완료 후의 전체 DOM HTML (상대경로→절대경로 변환 완료, 트래커·개인정보 제거) |');
+  push('| `02_sanitized_source.html` | 렌더링 완료 후의 전체 DOM HTML (로컬 스타일 시트 연동 완료, 트래커·개인정보 제거) |');
   push('| `03_styles_and_tokens.css` | 외부/인라인 CSS 전체 (출처별 구분, url() 절대경로 변환 완료) |');
   push('| `04_structured_data.json` | 전체 분석 원본 구조화 데이터 (JSON) |');
   if (savedScripts && savedScripts.length) push(`| \`05_scripts/\` | JS 소스 ${savedScripts.length}개 (정제·정렬됨, 목록은 7장) |`);
   push('| `06_section_cloning_specs.md` | **섹션별 1:1 복제 명세서** (각 섹션 내부 모든 하위 요소의 계산된 CSS 수치 트리 + 섹션별 정제 HTML 코드) |');
   if (structure && structure.svgCatalog && structure.svgCatalog.length) {
     push(`| \`07_svg_icons_and_graphics.md\` | 페이지 내 고유 SVG 로고·아이콘 ${structure.svgCatalog.length}개의 원본 \`<svg>\` 벡터 코드 모음 |`);
+  }
+  if (savedLocalAssets && savedLocalAssets.length) {
+    push(`| \`assets/\` | **로컬 다운로드 에셋 ${savedLocalAssets.length}개** (3D 모델, 텍스처, 폰트, Lottie JSON 등 - CORS 에러 없이 로컬 로드 가능) |`);
   }
   if (screenshots && (screenshots.viewportPath || screenshots.fullPagePath)) {
     push(`| \`screenshots/\` | 첫 화면, 스크롤 단계별 ${screenshots.scrollShots ? screenshots.scrollShots.length : 0}장, 전체 페이지 스크린샷 |`);
@@ -219,8 +223,11 @@ function generateMasterBlueprintMarkdown(data) {
   push('### 3.3 3D 모델 · 텍스처 · 디코더 (네트워크에서 실제 로드된 것)', '');
   const models = [...na.models3D, ...na.binaryBuffers];
   if (models.length) {
-    push('| 유형 | 출처 (호스팅) | 크기 | URL |', '| :--- | :--- | :--- | :--- |');
-    models.slice(0, 80).forEach((m) => push(`| ${cell(m.type)} | ${cell(m.provider)} | ${formatBytes(m.sizeBytes)} | ${cell(m.url.split('?')[0])} |`));
+    push('| 유형 | 출처 (호스팅) | 크기 | 로컬 파일 / 원본 URL |', '| :--- | :--- | :--- | :--- |');
+    models.slice(0, 80).forEach((m) => {
+      const loc = m.localPath ? `**\`${m.localPath}\`**<br>` : '';
+      push(`| ${cell(m.type)} | ${cell(m.provider)} | ${formatBytes(m.sizeBytes)} | ${loc}${cell(m.url.split('?')[0])} |`);
+    });
     if (models.length > 80) push(`| … | | | 외 ${models.length - 80}개 (04_structured_data.json 참고) |`);
   } else push('- 로드된 3D 모델 파일 없음');
   push('');
@@ -236,7 +243,10 @@ function generateMasterBlueprintMarkdown(data) {
 
   if (na.animations.length || na.videos.length) {
     push('### 3.5 모션 그래픽 / 비디오 에셋', '');
-    na.animations.forEach((a) => push(`- **${a.type}** — ${a.provider} (${formatBytes(a.sizeBytes)}) ${a.url.split('?')[0]}`));
+    na.animations.forEach((a) => {
+      const loc = a.localPath ? `**\`${a.localPath}\`** ` : '';
+      push(`- **${a.type}** — ${a.provider} (${formatBytes(a.sizeBytes)}) ${loc}${a.url.split('?')[0]}`);
+    });
     na.videos.slice(0, 15).forEach((v) => push(`- **${v.type}** — ${v.provider} (${formatBytes(v.sizeBytes)}) ${v.url.split('?')[0]}`));
     push('');
   }
@@ -500,6 +510,62 @@ function generateSvgCatalogMarkdown(data) {
 }
 
 /**
+ * Generates 00_AI_COPY_PASTE_PROMPT.md
+ * Turnkey prompt ready to be pasted directly into Claude / ChatGPT / Cursor / v0
+ */
+function generatePromptForAi(data) {
+  const { targetUrl, metadata, techStack, sections, savedScripts, savedLocalAssets, structure } = data;
+  const siteTitle = metadata.title || targetUrl;
+  const techNames = (techStack || []).map((t) => t.name).join(', ') || 'HTML5/CSS3/JavaScript';
+  const sectionCount = (sections || []).length;
+  const svgCount = (structure && structure.svgCatalog) ? structure.svgCatalog.length : 0;
+  const localAssetCount = (savedLocalAssets || []).length;
+
+  const L = [];
+  L.push('# 🤖 AI 웹사이트 1:1 완벽 클론 프롬프트 (Copy & Paste Prompt)');
+  L.push('');
+  L.push('> **[사용자 안내]** 아래 내용을 복사하여 **Claude 3.5 Sonnet**, **GPT-4o**, **Cursor**, 또는 **v0** 등 개발용 AI에게 그대로 붙여넣으세요.');
+  L.push('> 함께 생성된 파일 폴더 전체를 첨부하거나 프롬프트와 함께 컨텍스트로 제공하면 최고의 결과물을 얻을 수 있습니다.');
+  L.push('');
+  L.push('---');
+  L.push('');
+  L.push('```markdown');
+  L.push(`당신은 세계 최고의 수석 프론트엔드 엔지니어이자 UI/UX 퍼블리셔입니다.`);
+  L.push(`함께 제공된 스크래핑 분석 결과 파일들을 정밀 분석하여, 원본 웹사이트("${siteTitle}" - ${targetUrl})와 외관, 반응형 레이아웃, 세부 수치(px, color, typography), 그리고 인터랙션/모션이 1:1로 완벽하게 동일한 완성형 웹 애플리케이션 코드를 구현해주세요.`);
+  L.push('');
+  L.push('### 1. 제공된 파일 패키지 및 우선순위 가이드');
+  L.push('1. `01_AI_MASTER_BLUEPRINT.md`: 사이트 전체 아키텍처, 디자인 토큰(색상 HEX, 폰트 패밀리), 애니메이션 메커니즘, 감지된 라이브러리 및 런타임 이벤트 분석이 담긴 핵심 명세서입니다. 가장 먼저 정독하세요.');
+  L.push(`2. \`06_section_cloning_specs.md\`: 추출된 총 ${sectionCount}개 섹션의 하위 요소별 브라우저 실측 CSS 수치 트리(Computed Style Tree)와 정제된 섹션 HTML 마크업이 기록되어 있습니다. 레이아웃과 폰트 크기, 마진, 패딩 작성 시 이 파일의 수치를 최우선 기준으로 삼으세요.`);
+  if (svgCount > 0) {
+    L.push(`3. \`07_svg_icons_and_graphics.md\`: 사이트에 사용된 고유 벡터 로고 및 아이콘 ${svgCount}개의 원본 <svg> 코드가 수록되어 있습니다. 아이콘 라이브러리로 대체하지 말고 여기에 있는 순수 벡터 코드를 인라인으로 사용하세요.`);
+  }
+  L.push('4. `03_styles_and_tokens.css`: 원본 사이트의 CSS 변수(--var), 글로벌 스타일, 키프레임 애니메이션 및 호버 규칙입니다.');
+  L.push('5. `02_sanitized_source.html`: 실제 브라우저에서 렌더링된 전체 DOM 구조입니다 (로컬 오프라인 브라우저 열람 시 03_styles_and_tokens.css가 자동 연동되어 바로 확인 가능).');
+  if (localAssetCount > 0) {
+    L.push(`6. \`assets/\`: 3D 모델(.glb/.gltf), 환경맵(.hdr/.exr), 웹폰트(.woff2), Lottie 애니메이션(.json) 등 총 ${localAssetCount}개의 파일이 로컬로 영구 다운로드되어 있습니다. 외부 URL 호출 대신 로컬 상대경로(예: assets/파일명)로 즉시 로드하세요.`);
+  }
+  if (savedScripts && savedScripts.length > 0) {
+    L.push(`7. \`05_scripts/\`: 1차 사이트 스크립트 ${savedScripts.length}개가 정제·포맷팅되어 저장되어 있습니다. 인터랙션 및 3D 로직의 세부 동작 파악에 활용하세요.`);
+  }
+  L.push('');
+  L.push('### 2. 기술 스택 및 감지된 환경');
+  L.push(`- **감지된 기술**: ${techNames}`);
+  L.push(`- **테마 모드**: ${metadata.themeMode} (기본 배경: ${metadata.pageBackground})`);
+  L.push('');
+  L.push('### 3. 단계별 1:1 재현 지침');
+  L.push('1. **프로젝트 환경 설정**: Modern HTML5 + CSS3 (또는 Vite/React/Next.js/Tailwind CSS 중 가장 최적화된 프레임워크 선택)으로 시작하세요.');
+  L.push('2. **디자인 토큰 정의**: `01_AI_MASTER_BLUEPRINT.md`의 디자인 시스템 섹션과 `03_styles_and_tokens.css`의 CSS 변수를 :root에 완벽히 매핑하세요.');
+  L.push('3. **섹션별 정밀 조립**: `06_section_cloning_specs.md`의 섹션 1(헤더/히어로)부터 마지막 섹션(푸터)까지, 하위 요소의 font-size, line-height, letter-spacing, color, background, padding, margin, display(flex/grid), gap 수치를 오차 없이 그대로 코드로 구현하세요.');
+  L.push('4. **벡터 그래픽 삽입**: 로고와 아이콘은 `07_svg_icons_and_graphics.md`의 코드를 그대로 배치하여 렌더링 깨짐을 방지하세요.');
+  L.push('5. **인터랙션 & 모션**: `01_AI_MASTER_BLUEPRINT.md`의 "3. 작동 원리 · 3D · 모션"을 참조하여 스크롤 애니메이션, 호버 트랜지션, 휠 리스너 및 3D 캔버스를 생생하게 구현하세요.');
+  L.push('');
+  L.push('지금 즉시 섹션 1부터 바로 구동 가능한 완전한 소스 코드를 순차적으로 작성해주세요.');
+  L.push('```');
+
+  return L.join('\n');
+}
+
+/**
  * Saves all AI reference artifacts to outputDir
  */
 function saveBlueprintFiles(analysisData, outputDir) {
@@ -512,9 +578,22 @@ function saveBlueprintFiles(analysisData, outputDir) {
     files.push({ name: rel, description, size: fs.statSync(p).size });
   };
 
+  const promptMd = generatePromptForAi(analysisData);
+  write('00_AI_COPY_PASTE_PROMPT.md', promptMd, 'AI 복사-붙여넣기 전용 1:1 클론 프롬프트');
+
   const masterMarkdown = generateMasterBlueprintMarkdown(analysisData);
   write('01_AI_MASTER_BLUEPRINT.md', masterMarkdown, 'AI 전달용 통합 마스터 블루프린트');
-  write('02_sanitized_source.html', analysisData.sanitizedHtml || '', '정제된 전체 HTML (절대경로 변환됨)');
+
+  let htmlToSave = analysisData.sanitizedHtml || '';
+  if (htmlToSave && !htmlToSave.includes('03_styles_and_tokens.css')) {
+    if (htmlToSave.includes('</head>')) {
+      htmlToSave = htmlToSave.replace('</head>', '  <link rel="stylesheet" href="03_styles_and_tokens.css">\n</head>');
+    } else {
+      htmlToSave = '<link rel="stylesheet" href="03_styles_and_tokens.css">\n' + htmlToSave;
+    }
+  }
+  write('02_sanitized_source.html', htmlToSave, '정제된 전체 HTML (로컬 스타일 시트 연동 완료)');
+
   write('03_styles_and_tokens.css', `/* Sanitized styles for: ${analysisData.targetUrl}\n * Generated: ${analysisData.analyzedAt} */\n\n` + (analysisData.sanitizedCss || ''), '외부/인라인 CSS 전체');
 
   const sectionSpecsMd = generateSectionCloningSpecsMarkdown(analysisData);
@@ -543,11 +622,18 @@ function saveBlueprintFiles(analysisData, outputDir) {
     files.push({ name: `05_scripts/ (${savedScripts.length}개)`, description: '정제된 JS 소스', size: scriptBytes });
   }
 
+  if (analysisData.savedLocalAssets && analysisData.savedLocalAssets.length) {
+    let assetBytes = 0;
+    analysisData.savedLocalAssets.forEach((a) => { assetBytes += (a.sizeBytes || 0); });
+    files.push({ name: `assets/ (${analysisData.savedLocalAssets.length}개)`, description: '로컬 다운로드 3D/폰트/모션 에셋 (CORS 프리)', size: assetBytes });
+  }
+
   return { masterMarkdown, files };
 }
 
 module.exports = {
   generateMasterBlueprintMarkdown,
+  generatePromptForAi,
   saveBlueprintFiles,
   renderAsciiDomTree
 };
